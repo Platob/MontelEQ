@@ -10,6 +10,8 @@ variables:
     default: 0522-063219-lfvirtho
   period_days:
     default: "60"
+  insert_mode:
+    default: append
 
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
@@ -39,6 +41,8 @@ resources:
           default: ${var.schema_name}
         - name: period_days
           default: ${var.period_days}
+        - name: insert_mode
+          default: ${var.insert_mode}
 
       tasks:
         - task_key: plan
@@ -64,6 +68,7 @@ resources:
                   curve_category: "{{input}}"
                   catalog_name: "{{job.parameters.catalog_name}}"
                   period_days: "{{job.parameters.period_days}}"
+                  insert_mode: "{{job.parameters.insert_mode}}"
               libraries:
                 - whl: ../dist/*.whl
 

@@ -234,7 +234,9 @@ class APIClient(BaseClient):
         return_data: bool = False,
         spark: "SparkSession | bool | None" = None,
         batch_size: int | None = None,
+        insert_mode: Mode | str | None = None,
     ) -> Iterator[Any]:
+        resolved_mode = self._resolve_insert_mode(insert_mode)
         spark_session = self._resolve_spark(spark)
         use_spark = spark_session is not None
 
@@ -253,12 +255,14 @@ class APIClient(BaseClient):
                     batch,
                     insert_all=insert_all,
                     return_data=return_data,
+                    insert_mode=resolved_mode,
                 )
             else:
                 yield from self._curate_batch_polars(
                     batch,
                     insert_all=insert_all,
                     return_data=return_data,
+                    insert_mode=resolved_mode,
                 )
 
     # ------------------------------------------------------------------
@@ -273,12 +277,18 @@ class APIClient(BaseClient):
         raise_error: bool = False,
         batch_size: int | None = None,
         insert_all: bool = False,
+        insert_mode: Mode | str | None = None,
     ) -> dict[str, int | float]:
         """Distributed fetch → curate → insert pipeline.
 
         When ``spark=True`` (default), auto-detects the active SparkSession.
         When ``spark=False`` or ``spark=None``, uses the Polars path.
         A SparkSession instance can be passed directly.
+
+        ``insert_mode`` controls the write mode for curated Delta table
+        inserts.  Accepts a ``Mode`` enum value or a string
+        (``"append"``, ``"overwrite"``, ``"upsert"``).
+        Defaults to ``Mode.APPEND``.
         """
         t0 = time.perf_counter()
         stats: dict[str, int | float] = {"fetched": 0, "curated": 0, "tables": 0}
@@ -290,6 +300,7 @@ class APIClient(BaseClient):
             return_data=False,
             spark=spark,
             batch_size=batch_size,
+            insert_mode=insert_mode,
         ):
             stats["fetched"] += 1
 
@@ -310,6 +321,7 @@ class APIClient(BaseClient):
         *,
         insert_all: bool,
         return_data: bool,
+        insert_mode: Mode = Mode.APPEND,
     ) -> Iterator[Any]:
         if insert_all:
             base = batch.to_dataframe()
@@ -346,7 +358,7 @@ class APIClient(BaseClient):
                 curve_ids = {c.id for c in curves}
                 self.curation.table(curves[0]).insert(
                     sub,
-                    mode=Mode.APPEND,
+                    mode=insert_mode,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     prune_by={"curve_id": curve_ids},
                 )
@@ -366,6 +378,7 @@ class APIClient(BaseClient):
         *,
         insert_all: bool,
         return_data: bool,
+        insert_mode: Mode = Mode.APPEND,
     ) -> Iterator[polars.DataFrame]:
         if insert_all:
             responses = batch.iter_responses()
@@ -408,7 +421,7 @@ class APIClient(BaseClient):
                     continue
                 self.curation.table(curves[0]).insert(
                     sub,
-                    mode=Mode.APPEND,
+                    mode=insert_mode,
                     schema_mode=Mode.APPEND,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     wait=False,
@@ -431,6 +444,14 @@ class APIClient(BaseClient):
         if spark is True:
             return _get_spark()
         return spark
+
+    @staticmethod
+    def _resolve_insert_mode(insert_mode: "Mode | str | None") -> Mode:
+        if insert_mode is None:
+            return Mode.APPEND
+        if isinstance(insert_mode, Mode):
+            return insert_mode
+        return Mode[insert_mode.strip().upper()]
 
     # ------------------------------------------------------------------
     # Spark: curate a DataFrame of Responses via mapInArrow

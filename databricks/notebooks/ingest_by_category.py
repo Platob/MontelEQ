@@ -22,8 +22,9 @@ if not logger.handlers:
 curve_category = dbutils.widgets.get("curve_category")  # noqa: F821
 catalog_name = dbutils.widgets.get("catalog_name")  # noqa: F821
 period_days = int(dbutils.widgets.get("period_days"))  # noqa: F821
+insert_mode = dbutils.widgets.get("insert_mode") or None  # noqa: F821
 
-print(f"category={curve_category}, catalog={catalog_name}, period_days={period_days}")
+print(f"category={curve_category}, catalog={catalog_name}, period_days={period_days}, insert_mode={insert_mode}")
 
 # COMMAND ----------
 
@@ -34,6 +35,7 @@ result = ingest_category(
     curve_category,
     catalog_name=catalog_name,
     period_days=period_days,
+    insert_mode=insert_mode,
 )
 
 # COMMAND ----------

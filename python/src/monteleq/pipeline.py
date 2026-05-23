@@ -103,6 +103,7 @@ def ingest_category(
     period_days: int = DEFAULT_PERIOD_DAYS,
     issued_at_lookback_days: Optional[int] = None,
     spark: bool = True,
+    insert_mode: Optional[str] = None,
 ) -> dict:
     """Ingest all curves matching ``curve_category``.
 
@@ -112,6 +113,9 @@ def ingest_category(
         ``True`` (default) auto-detects the active SparkSession and uses
         distributed HTTP via ``mapInArrow``.  ``False`` forces the local
         Polars path even when Spark is available.
+    insert_mode :
+        Write mode for curated Delta table inserts.  Accepts
+        ``"append"`` (default), ``"overwrite"``, or ``"upsert"``.
     """
     from monteleq.api.client import APIClient
     from monteleq.api.request import CurveRequest
@@ -125,8 +129,8 @@ def ingest_category(
         else begin
     )
 
-    logger.info("Starting ingestion: category=%s begin=%s end=%s spark=%s",
-                curve_category, begin, end, spark)
+    logger.info("Starting ingestion: category=%s begin=%s end=%s spark=%s insert_mode=%s",
+                curve_category, begin, end, spark, insert_mode or "append")
 
     client = APIClient(catalog_name=catalog_name, schema_name=schema_name)
 
@@ -153,6 +157,7 @@ def ingest_category(
         requests,
         spark=spark,
         raise_error=False,
+        insert_mode=insert_mode,
     )
 
     result = {"category": curve_category, "curves": len(curves), **stats}
