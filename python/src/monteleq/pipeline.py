@@ -115,6 +115,91 @@ def plan_categories(
         return list(CATEGORIES)
 
 
+def refresh_curve_metadata(
+    *,
+    catalog_name: str = CATALOG_NAME,
+    schema_name: str = SCHEMA_NAME,
+    table_name: str = "curated_curve_metadata",
+) -> int:
+    """Upsert the full curve catalog into the ``curated_curve_metadata`` table.
+
+    Each row carries a ``table_category`` field that maps the curve to
+    its destination curated Delta table (e.g.
+    ``curated_actual_timeseries_wind``).
+
+    Returns the number of curves written.
+    """
+    import polars as pl
+    from yggdrasil.data.enums import Mode
+
+    from monteleq.api.client import APIClient
+    from monteleq.api.schemas import CURVE_METADATA_SCHEMA
+
+    client = APIClient(catalog_name=catalog_name, schema_name=schema_name)
+    curves = client.metadata.curves()
+
+    if not curves:
+        logger.warning("refresh_curve_metadata: no curves found")
+        return 0
+
+    now = dt.datetime.now(dt.timezone.utc)
+
+    df = pl.DataFrame({
+        "curve_id": [c.id for c in curves],
+        "curve_name": [c.name for c in curves],
+        "curve_type": [c.curve_type.name for c in curves],
+        "curve_data_type": [c.data_type.name for c in curves],
+        "curve_area": [c.area for c in curves],
+        "curve_area_sink": [c.area_sink for c in curves],
+        "curve_commodity": [c.commodity for c in curves],
+        "curve_source": [c.source for c in curves],
+        "curve_unit": [c.unit for c in curves],
+        "curve_denominator": [c.denominator for c in curves],
+        "curve_categories": [list(c.categories) for c in curves],
+        "curve_resolution_frequency": [c.resolution.frequency for c in curves],
+        "curve_resolution_timezone": [c.resolution.timezone for c in curves],
+        "curve_access_by": [c.access.by for c in curves],
+        "curve_access_package": [c.access.package for c in curves],
+        "curve_instance_issued_timezone": [c.instance_issued_timezone for c in curves],
+        "table_category": [c.table_name(prefix="curated_") for c in curves],
+        "updated_at": [now] * len(curves),
+    }, schema={
+        "curve_id": pl.Int64,
+        "curve_name": pl.Utf8,
+        "curve_type": pl.Utf8,
+        "curve_data_type": pl.Utf8,
+        "curve_area": pl.Utf8,
+        "curve_area_sink": pl.Utf8,
+        "curve_commodity": pl.Utf8,
+        "curve_source": pl.Utf8,
+        "curve_unit": pl.Utf8,
+        "curve_denominator": pl.Utf8,
+        "curve_categories": pl.List(pl.Utf8),
+        "curve_resolution_frequency": pl.Utf8,
+        "curve_resolution_timezone": pl.Utf8,
+        "curve_access_by": pl.Utf8,
+        "curve_access_package": pl.Utf8,
+        "curve_instance_issued_timezone": pl.Utf8,
+        "table_category": pl.Utf8,
+        "updated_at": pl.Datetime("us", "UTC"),
+    })
+
+    table = client.sql.table(table_name=table_name).ensure_created(
+        CURVE_METADATA_SCHEMA
+    )
+    table.insert(
+        df,
+        mode=Mode.APPEND,
+        match_by=["curve_id"],
+    )
+
+    logger.info(
+        "refresh_curve_metadata: upserted %d curves into %s (%d distinct tables)",
+        len(curves), table_name, df["table_category"].n_unique(),
+    )
+    return len(curves)
+
+
 def ingest_category(
     curve_category: str,
     *,
