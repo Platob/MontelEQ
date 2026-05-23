@@ -1,0 +1,58 @@
+[build-system]
+# bump setuptools so type-info files are handled sanely
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monteleq"
+version = "0.1.30"
+description = "Montel EQ client"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Montel EQ contributors" }]
+keywords = ["arrow", "polars", "pandas", "spark", "databricks", "monteleq", "yggdrasil"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Scientific/Engineering :: Information Analysis",  "Typing :: Typed",
+]
+dependencies = [
+  "ygg[databricks]==0.8.*",
+  "energyquantified",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "black",
+  "ruff",
+  "mypy",
+  "build",
+  "twine",
+]
+
+[project.urls]
+Homepage = "https://github.com/TotalEnergiesCode/monteleq"
+Repository = "https://github.com/TotalEnergiesCode/monteleq"
+Documentation = "https://github.com/TotalEnergiesCode/monteleq"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+license-files = ["LICENSE"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+native-tls = true
