@@ -102,14 +102,19 @@ def ingest_category(
     schema_name: str = SCHEMA_NAME,
     period_days: int = DEFAULT_PERIOD_DAYS,
     issued_at_lookback_days: Optional[int] = None,
+    spark: bool = True,
 ) -> dict:
-    """Ingest all curves matching ``curve_category`` using Spark-distributed HTTP."""
-    from pyspark.sql import SparkSession
+    """Ingest all curves matching ``curve_category``.
 
+    Parameters
+    ----------
+    spark :
+        ``True`` (default) auto-detects the active SparkSession and uses
+        distributed HTTP via ``mapInArrow``.  ``False`` forces the local
+        Polars path even when Spark is available.
+    """
     from monteleq.api.client import APIClient
     from monteleq.api.request import CurveRequest
-
-    spark = SparkSession.builder.getOrCreate()
 
     now = dt.datetime.now(dt.timezone.utc)
     end = now
@@ -120,7 +125,8 @@ def ingest_category(
         else begin
     )
 
-    logger.info("Starting ingestion: category=%s begin=%s end=%s", curve_category, begin, end)
+    logger.info("Starting ingestion: category=%s begin=%s end=%s spark=%s",
+                curve_category, begin, end, spark)
 
     client = APIClient(catalog_name=catalog_name, schema_name=schema_name)
 
@@ -145,7 +151,7 @@ def ingest_category(
 
     stats = client.ingest_spark(
         requests,
-        spark_session=spark,
+        spark=spark,
         raise_error=False,
     )
 

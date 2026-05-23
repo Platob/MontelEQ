@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 import pyarrow as pa
 from yggdrasil.data.cast import any_to_datetime, truncate_datetime
 from yggdrasil.data.enums import Mode
-from yggdrasil.environ import PyEnv
 from yggdrasil.io import URL
 
 from monteleq.api._base_client import BaseClient
@@ -27,11 +26,19 @@ from monteleq.api.events_client import EventsClient
 from monteleq.api.metadata_client import MetadataClient
 from monteleq.api.request import CurveRequest, CurveRequestsArg
 from monteleq.api.schemas import CURATED_DATA_SCHEMA
-from monteleq.model import Curve, Instance, DEFAULT_ISSUE_INTERVAL
+from monteleq.model import Instance, DEFAULT_ISSUE_INTERVAL
 
 __all__ = ["APIClient"]
 
 logger = logging.getLogger(__name__)
+
+
+def _get_spark() -> "SparkSession | None":
+    try:
+        from pyspark.sql import SparkSession
+        return SparkSession.getActiveSession()
+    except Exception:
+        return None
 
 
 class APIClient(BaseClient):
@@ -65,7 +72,7 @@ class APIClient(BaseClient):
 
     def list_instances(
         self,
-        requests: CurveRequest | Curve | str | Iterable[CurveRequest],
+        requests: CurveRequestsArg,
         *,
         begin: dt.datetime | str | None = None,
         end: dt.datetime | str | None = None,
@@ -191,7 +198,10 @@ class APIClient(BaseClient):
         issued_at_earliest: dt.datetime | str | None = None,
         issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
+        spark: "SparkSession | bool | None" = None,
+        batch_size: int | None = None,
     ) -> Iterator[Any]:
+        spark_session = self._resolve_spark(spark)
         yield from self.send_many_batches(
             CurveRequest.http_requests(
                 requests,
@@ -203,6 +213,8 @@ class APIClient(BaseClient):
                 raise_error=raise_error,
             ),
             raise_error=raise_error,
+            spark_session=spark_session,
+            batch_size=batch_size,
         )
 
     # ------------------------------------------------------------------
@@ -220,7 +232,12 @@ class APIClient(BaseClient):
         raise_error: bool = True,
         insert_all: bool = False,
         return_data: bool = False,
+        spark: "SparkSession | bool | None" = None,
+        batch_size: int | None = None,
     ) -> Iterator[Any]:
+        spark_session = self._resolve_spark(spark)
+        use_spark = spark_session is not None
+
         for batch in self.fetch_curves(
             requests,
             begin=begin,
@@ -228,168 +245,182 @@ class APIClient(BaseClient):
             issued_at_earliest=issued_at_earliest,
             issued_at_latest=issued_at_latest,
             raise_error=raise_error,
+            spark=spark_session,
+            batch_size=batch_size,
         ):
-            if PyEnv.in_databricks():
-                if insert_all:
-                    base = batch.to_dataframe()
-                elif batch.new_hits is None:
-                    continue
-                else:
-                    base = batch.new_hits.to_spark_frame()
-                curated = self.curate_responses_spark(base).cache()
-                curated.count()
-
-                curve_names = [
-                    _["curve_name"]
-                    for _ in curated.select("curve_name").distinct().collect()
-                ]
-                groups: dict[str, list[str]] = {}
-                for n in curve_names:
-                    tb = self.metadata.curves(name=n)[0].table_name(prefix="curated_")
-                    groups.setdefault(tb, []).append(n)
-
-                for tb, names in groups.items():
-                    sub = curated.filter(
-                        f"curve_name in ({', '.join(repr(n) for n in names)})"
-                    )
-                    if sub.limit(1).count() == 0:
-                        continue
-                    curves = self.metadata.curves(name=names)
-                    curve_ids = {c.id for c in curves}
-                    self.curation.table(curves[0]).insert(
-                        sub,
-                        mode=Mode.APPEND,
-                        match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                        prune_by={"curve_id": curve_ids},
-                    )
-
-                if return_data:
-                    yield curated
-
+            if use_spark:
+                yield from self._curate_batch_spark(
+                    batch,
+                    insert_all=insert_all,
+                    return_data=return_data,
+                )
             else:
-                if insert_all:
-                    responses = batch.iter_responses()
-                else:
-                    responses = batch.new_responses()
-                curated = None
-                for response in responses:
-                    if not response.ok:
-                        continue
-                    df = self.curation.curate(response)
-                    if df.height == 0:
-                        continue
-                    curated = df if curated is None else polars.concat(
-                        [curated, df], how="diagonal_relaxed",
-                    )
-
-                if curated is None:
-                    continue
-
-                groups: dict[str, list[str]] = {}
-                for n in curated["curve_name"].unique().to_list():
-                    tb = self.metadata.curves(name=n)[0].table_name(prefix="curated_")
-                    groups.setdefault(tb, []).append(n)
-
-                for tb, names in groups.items():
-                    sub = curated.filter(polars.col("curve_name").is_in(names))
-                    if sub.height == 0:
-                        continue
-                    curves = self.metadata.curves(name=names)
-                    self.curation.table(curves[0]).insert(
-                        sub,
-                        mode=Mode.APPEND,
-                        schema_mode=Mode.APPEND,
-                        match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                        wait=False,
-                        prune_values={"curve_id": {c.id for c in curves}},
-                    )
-
-                if return_data:
-                    yield curated
+                yield from self._curate_batch_polars(
+                    batch,
+                    insert_all=insert_all,
+                    return_data=return_data,
+                )
 
     # ------------------------------------------------------------------
-    # Spark-distributed ingestion: fetch → curate new_hits → insert
+    # Spark-distributed ingestion (convenience wrapper)
     # ------------------------------------------------------------------
 
     def ingest_spark(
         self,
         requests: CurveRequestsArg,
         *,
-        spark_session: "SparkSession",
+        spark: "SparkSession | bool | None" = True,
         raise_error: bool = False,
         batch_size: int | None = None,
         insert_all: bool = False,
     ) -> dict[str, int | float]:
-        """Distributed fetch → curate → insert pipeline using Spark."""
+        """Distributed fetch → curate → insert pipeline.
+
+        When ``spark=True`` (default), auto-detects the active SparkSession.
+        When ``spark=False`` or ``spark=None``, uses the Polars path.
+        A SparkSession instance can be passed directly.
+        """
         t0 = time.perf_counter()
         stats: dict[str, int | float] = {"fetched": 0, "curated": 0, "tables": 0}
 
-        prepared = CurveRequest.http_requests(
+        for _ in self.curate_curves(
             requests,
-            client=self,
             raise_error=raise_error,
-        )
-
-        for batch in self.send_many_batches(
-            prepared,
-            raise_error=raise_error,
-            spark_session=spark_session,
+            insert_all=insert_all,
+            return_data=False,
+            spark=spark,
             batch_size=batch_size,
         ):
             stats["fetched"] += 1
 
-            if insert_all:
-                base = batch.to_dataframe()
-            elif batch.new_hits is None:
-                continue
-            else:
-                base = batch.new_hits.to_spark_frame()
-
-            curated = self.curate_responses_spark(base).cache()
-            row_count = curated.count()
-            if row_count == 0:
-                continue
-
-            stats["curated"] += row_count
-
-            curve_names = [
-                _["curve_name"]
-                for _ in curated.select("curve_name").distinct().collect()
-            ]
-            groups: dict[str, list[str]] = {}
-            for n in curve_names:
-                matches = self.metadata.curves(name=n)
-                if matches:
-                    tb = matches[0].table_name(prefix="curated_")
-                    groups.setdefault(tb, []).append(n)
-
-            for tb, names in groups.items():
-                sub = curated.filter(
-                    f"curve_name in ({', '.join(repr(n) for n in names)})"
-                )
-                if sub.limit(1).count() == 0:
-                    continue
-                try:
-                    curves = self.metadata.curves(name=names)
-                    curve_ids = {c.id for c in curves}
-                    self.curation.table(curves[0]).insert(
-                        sub,
-                        mode=Mode.APPEND,
-                        match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                        prune_by={"curve_id": curve_ids},
-                    )
-                    stats["tables"] += 1
-                except Exception:
-                    logger.exception("Insert failed for table %s", tb)
-
         stats["elapsed"] = round(time.perf_counter() - t0, 2)
         logger.info(
-            "ingest_spark complete: %d batches fetched, %d rows curated, "
-            "%d tables written in %.2fs",
-            stats["fetched"], stats["curated"],
-            stats["tables"], stats["elapsed"],
+            "ingest complete: %.2fs elapsed",
+            stats["elapsed"],
         )
         return stats
+
+    # ------------------------------------------------------------------
+    # Internal: Spark curate path
+    # ------------------------------------------------------------------
+
+    def _curate_batch_spark(
+        self,
+        batch: Any,
+        *,
+        insert_all: bool,
+        return_data: bool,
+    ) -> Iterator[Any]:
+        if insert_all:
+            base = batch.to_dataframe()
+        elif batch.new_hits is None:
+            return
+        else:
+            base = batch.new_hits.to_spark_frame()
+
+        curated = self.curate_responses_spark(base).cache()
+        curated.count()
+
+        curve_names = [
+            _["curve_name"]
+            for _ in curated.select("curve_name").distinct().collect()
+        ]
+        groups: dict[str, list[str]] = {}
+        for n in curve_names:
+            matches = self.metadata.curves(name=n)
+            if matches:
+                tb = matches[0].table_name(prefix="curated_")
+                groups.setdefault(tb, []).append(n)
+
+        for tb, names in groups.items():
+            sub = curated.filter(
+                f"curve_name in ({', '.join(repr(n) for n in names)})"
+            )
+            if sub.limit(1).count() == 0:
+                continue
+            try:
+                curves = self.metadata.curves(name=names)
+                curve_ids = {c.id for c in curves}
+                self.curation.table(curves[0]).insert(
+                    sub,
+                    mode=Mode.APPEND,
+                    match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
+                    prune_by={"curve_id": curve_ids},
+                )
+            except Exception:
+                logger.exception("Insert failed for table %s", tb)
+
+        if return_data:
+            yield curated
+
+    # ------------------------------------------------------------------
+    # Internal: Polars curate path
+    # ------------------------------------------------------------------
+
+    def _curate_batch_polars(
+        self,
+        batch: Any,
+        *,
+        insert_all: bool,
+        return_data: bool,
+    ) -> Iterator[polars.DataFrame]:
+        if insert_all:
+            responses = batch.iter_responses()
+        else:
+            responses = batch.new_responses()
+
+        curated: polars.DataFrame | None = None
+        for response in responses:
+            if not response.ok:
+                continue
+            df = self.curation.curate(response)
+            if df.height == 0:
+                continue
+            curated = df if curated is None else polars.concat(
+                [curated, df], how="diagonal_relaxed",
+            )
+
+        if curated is None:
+            return
+
+        groups: dict[str, list[str]] = {}
+        for n in curated["curve_name"].unique().to_list():
+            matches = self.metadata.curves(name=n)
+            if matches:
+                tb = matches[0].table_name(prefix="curated_")
+                groups.setdefault(tb, []).append(n)
+
+        for tb, names in groups.items():
+            sub = curated.filter(polars.col("curve_name").is_in(names))
+            if sub.height == 0:
+                continue
+            try:
+                curves = self.metadata.curves(name=names)
+                self.curation.table(curves[0]).insert(
+                    sub,
+                    mode=Mode.APPEND,
+                    schema_mode=Mode.APPEND,
+                    match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
+                    wait=False,
+                    prune_values={"curve_id": {c.id for c in curves}},
+                )
+            except Exception:
+                logger.exception("Insert failed for table %s", tb)
+
+        if return_data:
+            yield curated
+
+    # ------------------------------------------------------------------
+    # Resolve spark argument
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_spark(spark: "SparkSession | bool | None") -> "SparkSession | None":
+        if spark is None or spark is False:
+            return None
+        if spark is True:
+            return _get_spark()
+        return spark
 
     # ------------------------------------------------------------------
     # Spark: curate a DataFrame of Responses via mapInArrow
