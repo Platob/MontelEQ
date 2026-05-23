@@ -29,7 +29,7 @@ resources:
         pipeline: ingestion
 
       schedule:
-        quartz_cron_expression: "0 0 5 * * ?"
+        quartz_cron_expression: "0 0 * * * ?"
         timezone_id: UTC
 
       parameters:
@@ -39,21 +39,33 @@ resources:
           default: ${var.schema_name}
         - name: period_days
           default: ${var.period_days}
-        - name: curve_category
-          default: ""
 
       tasks:
-        - task_key: ingest
+        - task_key: plan
           existing_cluster_id: ${var.cluster_id}
           notebook_task:
-            notebook_path: ./notebooks/ingest_by_data_type.py
+            notebook_path: ./notebooks/plan.py
             base_parameters:
-              curve_category: "{{job.parameters.curve_category}}"
               catalog_name: "{{job.parameters.catalog_name}}"
-              schema_name: "{{job.parameters.schema_name}}"
-              period_days: "{{job.parameters.period_days}}"
           libraries:
             - whl: ./dist/*.whl
+
+        - task_key: ingest_by_category
+          depends_on:
+            - task_key: plan
+          existing_cluster_id: ${var.cluster_id}
+          for_each_task:
+            inputs: "{{tasks.plan.values.result_state}}"
+            task:
+              task_key: ingest_category
+              notebook_task:
+                notebook_path: ./notebooks/ingest_by_category.py
+                base_parameters:
+                  curve_category: "{{input}}"
+                  catalog_name: "{{job.parameters.catalog_name}}"
+                  period_days: "{{job.parameters.period_days}}"
+              libraries:
+                - whl: ./dist/*.whl
 
 targets:
   dev:
