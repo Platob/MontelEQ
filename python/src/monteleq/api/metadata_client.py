@@ -16,8 +16,6 @@ if TYPE_CHECKING:
 
 __all__ = ["MetadataClient"]
 
-_CurvePredicate = type(lambda c: True)
-
 
 class MetadataClient:
     """
@@ -196,7 +194,7 @@ class MetadataClient:
         # ---- 2) BUILD PREDICATE LIST -----------------------------------------
         # Collect all active filters, then apply in a single pass over
         # candidates instead of N sequential list comprehensions.
-        predicates: list[_CurvePredicate] = []
+        predicates: list = []
 
         if curve_type is not None:
             if isinstance(curve_type, (str, CurveType)):

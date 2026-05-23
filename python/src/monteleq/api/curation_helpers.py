@@ -220,7 +220,10 @@ def localize_by_distinct_timezones(
         tz_values = naive_df.get_column(timezone_col).unique().to_list()
 
         for tz in tz_values:
-            bucket = naive_df.filter(pl.col(timezone_col) == tz)
+            if tz is None:
+                bucket = naive_df.filter(pl.col(timezone_col).is_null())
+            else:
+                bucket = naive_df.filter(pl.col(timezone_col) == tz)
 
             if not bucket.height:
                 continue

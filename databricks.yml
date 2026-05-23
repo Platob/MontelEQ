@@ -55,7 +55,7 @@ resources:
             - task_key: plan
           existing_cluster_id: ${var.cluster_id}
           for_each_task:
-            inputs: "{{tasks.plan.values.result_state}}"
+            inputs: "{{tasks.plan.values.notebook_output.result}}"
             task:
               task_key: ingest_category
               notebook_task:

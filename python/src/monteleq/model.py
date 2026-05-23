@@ -28,6 +28,7 @@ from energyquantified.metadata import CurveType, DataType
 
 DEFAULT_ISSUE_INTERVAL = dt.timedelta(hours=4)
 _UNSAFE_CHARS = re.compile(r"[^a-z0-9]+")
+_TABLE_NAME_CACHE: dict[tuple, str] = {}
 
 
 def _safe_name(value: str) -> str:
@@ -235,6 +236,11 @@ class Curve:
             object.__setattr__(self, "id", _xxh3_id(self.name))
 
     def table_name(self, prefix: str = "") -> str:
+        key = (self.data_type.name, self.curve_type.name, self.categories[:2], prefix)
+        cached = _TABLE_NAME_CACHE.get(key)
+        if cached is not None:
+            return cached
+
         data_type = _safe_name(self.data_type.name) or "none"
         curve_type = _safe_name(self.curve_type.name) or "none"
 
@@ -248,7 +254,9 @@ class Curve:
         safe_prefix = _safe_name(prefix)
         safe_prefix = f"{safe_prefix}_" if safe_prefix else ""
 
-        return f"{safe_prefix}{data_type}_{curve_type}{categories}"
+        result = f"{safe_prefix}{data_type}_{curve_type}{categories}"
+        _TABLE_NAME_CACHE[key] = result
+        return result
 
     @property
     def is_instance(self) -> bool:
