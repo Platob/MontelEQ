@@ -9,7 +9,7 @@ import polars as pl
 import xxhash
 from yggdrasil.data.cast import any_to_datetime
 from yggdrasil.data.enums.timezone import Timezone
-from yggdrasil.io.http_ import HTTPResponse
+from yggdrasil.io.response import Response as HTTPResponse
 
 from monteleq.api.curation_helpers import (
     GAS_DAY_TZ,

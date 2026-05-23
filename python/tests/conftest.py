@@ -11,17 +11,22 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+_BOOTSTRAP_MODULES = [
+    "monteleq.model",
+    "monteleq.api.request",
+    "monteleq.api.schemas",
+    "monteleq.api.curation_helpers",
+    "monteleq.api.curation_client",
+]
+
 
 def _bootstrap_monteleq():
-    """Bootstrap monteleq.model and monteleq.api.request for unit testing.
+    """Bootstrap monteleq submodules for unit testing.
 
-    In environments where the full yggdrasil native module is unavailable,
-    importing through ``monteleq.__init__`` fails because it chains to
-    ``APIClient`` which requires ``yggdrasil.io.http_.HTTPSession``.
-
-    This bootstraps the package and subpackage modules directly, so that
-    ``from monteleq.model import Curve`` works without triggering the
-    APIClient import chain.
+    When the full yggdrasil native module is unavailable, importing through
+    ``monteleq.__init__`` fails because it chains to ``APIClient`` which
+    requires ``yggdrasil.io.http_.HTTPSession``.  This bootstraps individual
+    modules directly so tests can import them without the full chain.
     """
     if "monteleq" in sys.modules:
         return
@@ -40,19 +45,18 @@ def _bootstrap_monteleq():
     api_pkg.__path__ = [str(SRC_ROOT / "monteleq" / "api")]
     sys.modules["monteleq.api"] = api_pkg
 
-    model_path = SRC_ROOT / "monteleq" / "model.py"
-    if model_path.exists():
-        spec = importlib.util.spec_from_file_location("monteleq.model", str(model_path))
+    for mod_name in _BOOTSTRAP_MODULES:
+        parts = mod_name.split(".")
+        file_path = SRC_ROOT / ("/".join(parts) + ".py")
+        if not file_path.exists():
+            continue
+        spec = importlib.util.spec_from_file_location(mod_name, str(file_path))
         mod = importlib.util.module_from_spec(spec)
-        sys.modules["monteleq.model"] = mod
-        spec.loader.exec_module(mod)
-
-    request_path = SRC_ROOT / "monteleq" / "api" / "request.py"
-    if request_path.exists():
-        spec = importlib.util.spec_from_file_location("monteleq.api.request", str(request_path))
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["monteleq.api.request"] = mod
-        spec.loader.exec_module(mod)
+        sys.modules[mod_name] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            del sys.modules[mod_name]
 
 
 _bootstrap_monteleq()
