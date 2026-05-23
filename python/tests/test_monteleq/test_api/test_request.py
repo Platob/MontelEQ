@@ -340,6 +340,32 @@ class TestCurveRequestParameters:
         assert "issued-at-latest" in params
         assert "limit" in params
 
+    def test_instance_params_no_begin_end(self):
+        c = _instance_curve()
+        req = CurveRequest(
+            curve=c,
+            begin=dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2025, 6, 1, tzinfo=dt.timezone.utc),
+        )
+        params = req.parameters()
+        assert "begin" not in params
+        assert "end" not in params
+
+    def test_period_instance_params_no_begin_end(self):
+        c = Curve(
+            name="test",
+            curve_type=CurveType.INSTANCE_PERIOD,
+            data_type=DataType.REMIT,
+        )
+        req = CurveRequest(
+            curve=c,
+            begin=dt.datetime(2025, 1, 1, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2025, 6, 1, tzinfo=dt.timezone.utc),
+        )
+        params = req.parameters()
+        assert "begin" not in params
+        assert "end" not in params
+
     def test_timezone_included(self):
         c = _ts_curve()
         req = CurveRequest(curve=c, timezone="CET")

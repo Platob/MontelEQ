@@ -393,7 +393,9 @@ class CurveRequest:
 
         params: dict[str, Any] = {}
 
-        if self.curve_type in [CurveType.OHLC]:
+        if self.curve.is_instance or self.curve.is_period_instance:
+            pass
+        elif self.curve_type in [CurveType.OHLC]:
             if self.begin:
                 params["begin"] = self.begin.strftime("%Y-%m-%d")
             if self.end:
@@ -477,45 +479,47 @@ class CurveRequest:
                 yield curve_request
                 continue
 
-            for start, end_ in iter_datetime_ranges(
-                curve_request.begin,
-                curve_request.end,
-                interval=curve_request.fetch_interval,
-            ):
-                refined: CurveRequest = curve_request.copy(
-                    begin=start, end=end_,
-                    client=client,
+            if curve_request.curve.is_instance or curve_request.curve.is_period_instance:
+                for instance in client.list_instances(
+                    requests=curve_request,
+                    issued_at_earliest=issued_at_earliest,
+                    issued_at_latest=issued_at_latest,
                     raise_error=raise_error,
-                )
-
-                if refined.curve.is_instance or refined.curve.is_period_instance:
-                    for instance in client.list_instances(
-                        requests=curve_request,
-                        issued_at_earliest=issued_at_earliest,
-                        issued_at_latest=issued_at_latest,
+                ):
+                    if curve_request.curve.is_instance:
+                        yield curve_request.copy(
+                            curve=instance.curve,
+                            issued_at=instance.issued_at,
+                            issued_at_earliest=None,
+                            issued_at_latest=None,
+                            request_tags=instance.tags,
+                            client=client,
+                            raise_error=raise_error,
+                        )
+                    else:
+                        iae = truncate_datetime(
+                            instance.issued_at,
+                            tz=dt.timezone.utc,
+                            interval=DEFAULT_ISSUE_INTERVAL,
+                            add_interval=False,
+                        )
+                        yield curve_request.copy(
+                            curve=instance.curve,
+                            issued_at=None,
+                            issued_at_earliest=iae,
+                            issued_at_latest=iae + DEFAULT_ISSUE_INTERVAL,
+                            request_tags=instance.tags,
+                            client=client,
+                            raise_error=raise_error,
+                        )
+            else:
+                for start, end_ in iter_datetime_ranges(
+                    curve_request.begin,
+                    curve_request.end,
+                    interval=curve_request.fetch_interval,
+                ):
+                    yield curve_request.copy(
+                        begin=start, end=end_,
+                        client=client,
                         raise_error=raise_error,
-                    ):
-                        if curve_request.curve.is_instance:
-                            yield refined.copy(
-                                curve=instance.curve,
-                                issued_at=instance.issued_at,
-                                issued_at_earliest=None,
-                                issued_at_latest=None,
-                                request_tags=instance.tags,
-                            )
-                        else:
-                            iae = truncate_datetime(
-                                instance.issued_at,
-                                tz=dt.timezone.utc,
-                                interval=DEFAULT_ISSUE_INTERVAL,
-                                add_interval=False,
-                            )
-                            yield refined.copy(
-                                curve=instance.curve,
-                                issued_at=None,
-                                issued_at_earliest=iae,
-                                issued_at_latest=iae + DEFAULT_ISSUE_INTERVAL,
-                                request_tags=instance.tags,
-                            )
-                else:
-                    yield refined
+                    )
