@@ -11,6 +11,14 @@ The job runs hourly with two phases:
 2. **ingest_by_category** — one task per category, runs in parallel,
    each using Spark-distributed HTTP via ``mapInArrow``.
 
+Supports two modes via the ``latest`` job parameter:
+
+* **latest=True** (default, scheduled) — uses ``period_days`` as a
+  lookback window from now.
+* **latest=False** (manual backfill) — uses explicit ``start``/``end``
+  datetime range.  ``insert_mode`` can be set to ``overwrite`` to
+  replace curated data for the window.
+
 Static categories are derived from the EnergyQuantified catalog snapshot
 (31k curves, 39 first-level categories).
 """
@@ -69,6 +77,18 @@ CATEGORIES: list[str] = [
 ]
 
 
+def _parse_dt(value: str | None) -> dt.datetime | None:
+    if not value or not value.strip():
+        return None
+    s = value.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    parsed = dt.datetime.fromisoformat(s)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
 def plan_categories(
     *,
     catalog_name: str = CATALOG_NAME,
@@ -100,6 +120,9 @@ def ingest_category(
     *,
     catalog_name: str = CATALOG_NAME,
     schema_name: str = SCHEMA_NAME,
+    latest: bool = True,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
     period_days: int = DEFAULT_PERIOD_DAYS,
     issued_at_lookback_days: Optional[int] = None,
     spark: bool = True,
@@ -109,28 +132,47 @@ def ingest_category(
 
     Parameters
     ----------
+    latest :
+        ``True`` (default, scheduled) — lookback ``period_days`` from
+        now.  ``False`` (manual backfill) — use ``start``/``end``.
+    start / end :
+        Explicit ISO-8601 datetime boundaries when ``latest=False``.
+    period_days :
+        Number of days to look back when ``latest=True``.
+    insert_mode :
+        Write mode for curated Delta table inserts.  Accepts
+        ``"append"`` (default), ``"overwrite"``, or ``"upsert"``.
     spark :
         ``True`` (default) auto-detects the active SparkSession and uses
         distributed HTTP via ``mapInArrow``.  ``False`` forces the local
         Polars path even when Spark is available.
-    insert_mode :
-        Write mode for curated Delta table inserts.  Accepts
-        ``"append"`` (default), ``"overwrite"``, or ``"upsert"``.
     """
     from monteleq.api.client import APIClient
     from monteleq.api.request import CurveRequest
 
     now = dt.datetime.now(dt.timezone.utc)
-    end = now
-    begin = now - dt.timedelta(days=period_days)
+
+    if latest:
+        end_dt = now
+        begin_dt = now - dt.timedelta(days=period_days)
+    else:
+        begin_dt = _parse_dt(start)
+        end_dt = _parse_dt(end)
+        if begin_dt is None:
+            raise ValueError("`start` is required when latest=False")
+        if end_dt is None:
+            end_dt = now
+
     issued_at_earliest = (
         now - dt.timedelta(days=issued_at_lookback_days)
         if issued_at_lookback_days
-        else begin
+        else begin_dt
     )
 
-    logger.info("Starting ingestion: category=%s begin=%s end=%s spark=%s insert_mode=%s",
-                curve_category, begin, end, spark, insert_mode or "append")
+    logger.info(
+        "Starting ingestion: category=%s begin=%s end=%s latest=%s insert_mode=%s spark=%s",
+        curve_category, begin_dt, end_dt, latest, insert_mode or "append", spark,
+    )
 
     client = APIClient(catalog_name=catalog_name, schema_name=schema_name)
 
@@ -144,8 +186,8 @@ def ingest_category(
     requests = [
         CurveRequest(
             curve=c,
-            begin=begin,
-            end=end,
+            begin=begin_dt,
+            end=end_dt,
             issued_at_earliest=issued_at_earliest,
             client=client,
             raise_error=False,

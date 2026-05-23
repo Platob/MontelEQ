@@ -4,27 +4,38 @@
 # MAGIC
 # MAGIC Spark-distributed ingestion of EnergyQuantified curves for a single category.
 # MAGIC Called as a downstream task from the plan task.
+# MAGIC
+# MAGIC * **latest=True** (default, scheduled) — uses `period_days` as a
+# MAGIC   lookback window from now.  Incremental append.
+# MAGIC * **latest=False** (manual backfill) — uses explicit `start`/`end`
+# MAGIC   datetime range.  `mode` can be set to `overwrite` to replace
+# MAGIC   curated data for the window.
 
 # COMMAND ----------
 
-import logging
-
-logger = logging.getLogger("monteleq")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s — %(message)s"))
-    logger.addHandler(handler)
+from yggdrasil.data.enums import Mode
+from yggdrasil.environ.parameters import SystemParameters
 
 # COMMAND ----------
 
-# DBTITLE 1,Parameters
-curve_category = dbutils.widgets.get("curve_category")  # noqa: F821
-catalog_name = dbutils.widgets.get("catalog_name")  # noqa: F821
-period_days = int(dbutils.widgets.get("period_days"))  # noqa: F821
-insert_mode = dbutils.widgets.get("insert_mode") or None  # noqa: F821
 
-print(f"category={curve_category}, catalog={catalog_name}, period_days={period_days}, insert_mode={insert_mode}")
+class Config(SystemParameters):
+    latest: bool = True
+    start: str = ""
+    end: str = ""
+    curve_category: str = ""
+    catalog_name: str = "trading_tgp_prd"
+    schema_name: str = "src_monteleq"
+    period_days: int = 60
+    mode: Mode = Mode.APPEND
+
+
+config = Config().init_job()
+
+if not config.curve_category:
+    raise ValueError("`curve_category` widget is required")
+
+print(config)
 
 # COMMAND ----------
 
@@ -32,10 +43,14 @@ print(f"category={curve_category}, catalog={catalog_name}, period_days={period_d
 from monteleq.pipeline import ingest_category
 
 result = ingest_category(
-    curve_category,
-    catalog_name=catalog_name,
-    period_days=period_days,
-    insert_mode=insert_mode,
+    config.curve_category,
+    catalog_name=config.catalog_name,
+    schema_name=config.schema_name,
+    latest=config.latest,
+    start=config.start or None,
+    end=config.end or None,
+    period_days=config.period_days,
+    insert_mode=config.mode.name if config.mode != Mode.APPEND else None,
 )
 
 # COMMAND ----------

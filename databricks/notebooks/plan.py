@@ -8,27 +8,32 @@
 # COMMAND ----------
 
 import json
-import logging
 
-logger = logging.getLogger("monteleq")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s — %(message)s"))
-    logger.addHandler(handler)
+from yggdrasil.environ.parameters import SystemParameters
 
 # COMMAND ----------
 
-# DBTITLE 1,Parameters
-catalog_name = dbutils.widgets.get("catalog_name")  # noqa: F821
+
+class Config(SystemParameters):
+    catalog_name: str = "trading_tgp_prd"
+    schema_name: str = "src_monteleq"
+
+
+config = Config().init_job()
+
+print(config)
 
 # COMMAND ----------
 
 # DBTITLE 1,Fetch catalog and resolve categories
 from monteleq.pipeline import plan_categories
 
-categories = plan_categories(catalog_name=catalog_name)
-logger.info("Plan resolved %d categories: %s", len(categories), categories)
+categories = plan_categories(
+    catalog_name=config.catalog_name,
+    schema_name=config.schema_name,
+)
+
+print(f"Resolved {len(categories)} categories: {categories}")
 
 # COMMAND ----------
 
