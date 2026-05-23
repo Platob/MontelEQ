@@ -13,7 +13,7 @@ The job runs hourly with two phases:
 
 Supports two modes via the ``latest`` job parameter:
 
-* **latest=True** (default, scheduled) — uses ``period_days`` as a
+* **latest=True** (default, scheduled) — uses ``period_hours`` as a
   lookback window from now.
 * **latest=False** (manual backfill) — uses explicit ``start``/``end``
   datetime range.  ``insert_mode`` can be set to ``overwrite`` to
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 CATALOG_NAME = "trading_tgp_prd"
 SCHEMA_NAME = "src_monteleq"
-DEFAULT_PERIOD_DAYS = 60
+DEFAULT_PERIOD_HOURS = 1
 
 CATEGORIES: list[str] = [
     "Asphaltite",
@@ -214,7 +214,7 @@ def ingest_category(
     latest: bool = True,
     start: Optional[str] = None,
     end: Optional[str] = None,
-    period_days: int = DEFAULT_PERIOD_DAYS,
+    period_hours: int = DEFAULT_PERIOD_HOURS,
     issued_at_lookback_days: Optional[int] = None,
     spark: bool = True,
     insert_mode: Optional[str] = None,
@@ -224,12 +224,12 @@ def ingest_category(
     Parameters
     ----------
     latest :
-        ``True`` (default, scheduled) — lookback ``period_days`` from
+        ``True`` (default, scheduled) — lookback ``period_hours`` from
         now.  ``False`` (manual backfill) — use ``start``/``end``.
     start / end :
         Explicit ISO-8601 datetime boundaries when ``latest=False``.
-    period_days :
-        Number of days to look back when ``latest=True``.
+    period_hours :
+        Number of hours to look back when ``latest=True``.
     insert_mode :
         Write mode for curated Delta table inserts.  Accepts
         ``"append"`` (default), ``"overwrite"``, or ``"upsert"``.
@@ -245,7 +245,7 @@ def ingest_category(
 
     if latest:
         end_dt = now
-        begin_dt = now - dt.timedelta(days=period_days)
+        begin_dt = now - dt.timedelta(hours=period_hours)
     else:
         begin_dt = _parse_dt(start)
         end_dt = _parse_dt(end)

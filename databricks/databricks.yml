@@ -7,7 +7,7 @@
 #
 #       latest=true (default, scheduled every hour):
 #           `plan` resolves categories from the curve catalog.
-#           `ingest_by_category` fetches the last `period_days`,
+#           `ingest_by_category` fetches the last `period_hours`,
 #           appends to curated_* tables.
 #
 #       latest=false (manual backfill):
@@ -36,9 +36,9 @@ variables:
   cluster_id:
     description: "Cluster for HTTP-heavy raw+curate work."
     default: 0522-063219-lfvirtho
-  period_days:
-    description: "Lookback window in days when latest=true."
-    default: "60"
+  period_hours:
+    description: "Lookback window in hours when latest=true."
+    default: "1"
 
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
@@ -72,8 +72,8 @@ resources:
           default: ${var.catalog_name}
         - name: schema_name
           default: ${var.schema_name}
-        - name: period_days
-          default: ${var.period_days}
+        - name: period_hours
+          default: ${var.period_hours}
         - name: mode
           default: append
 
@@ -105,7 +105,7 @@ resources:
                   end: "{{job.parameters.end}}"
                   catalog_name: "{{job.parameters.catalog_name}}"
                   schema_name: "{{job.parameters.schema_name}}"
-                  period_days: "{{job.parameters.period_days}}"
+                  period_hours: "{{job.parameters.period_hours}}"
                   mode: "{{job.parameters.mode}}"
               libraries:
                 - whl: ../dist/*.whl
