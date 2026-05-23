@@ -10,7 +10,7 @@ from yggdrasil.databricks import DatabricksClient
 from yggdrasil.databricks.table import Table
 from yggdrasil.environ import PyEnv
 from yggdrasil.io import URL
-from yggdrasil.io.http_ import HTTPSession
+from yggdrasil.http_ import HTTPSession
 from yggdrasil.io.send_config import CacheConfig
 
 from monteleq.model import Curve

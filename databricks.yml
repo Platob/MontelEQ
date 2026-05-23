@@ -32,11 +32,6 @@ resources:
         quartz_cron_expression: "0 0 5 * * ?"
         timezone_id: UTC
 
-      job_clusters:
-        - job_cluster_key: ingestion_cluster
-          new_cluster:
-            existing_cluster_id: ${var.cluster_id}
-
       parameters:
         - name: catalog_name
           default: ${var.catalog_name}
@@ -44,148 +39,19 @@ resources:
           default: ${var.schema_name}
         - name: period_days
           default: ${var.period_days}
+        - name: curve_category
+          default: ""
 
       tasks:
-        - task_key: ingest_actual
+        - task_key: ingest
           existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=ACTUAL
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_forecast
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=FORECAST
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_remit
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=REMIT
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_normal
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=NORMAL
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_ohlc
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=OHLC
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_capacity
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=CAPACITY
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_synthetic
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=SYNTHETIC
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_backcast
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=BACKCAST
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_forex
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=FOREX
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_climate
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=CLIMATE
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
-          libraries:
-            - whl: ./dist/*.whl
-
-        - task_key: ingest_scenario
-          existing_cluster_id: ${var.cluster_id}
-          python_wheel_task:
-            package_name: monteleq
-            entry_point: monteleq.pipeline:ingest_data_type
-            parameters:
-              - --data-type=SCENARIO
-              - --catalog-name={{job.parameters.catalog_name}}
-              - --schema-name={{job.parameters.schema_name}}
-              - --period-days={{job.parameters.period_days}}
+          notebook_task:
+            notebook_path: ./notebooks/ingest_by_data_type.py
+            base_parameters:
+              curve_category: "{{job.parameters.curve_category}}"
+              catalog_name: "{{job.parameters.catalog_name}}"
+              schema_name: "{{job.parameters.schema_name}}"
+              period_days: "{{job.parameters.period_days}}"
           libraries:
             - whl: ./dist/*.whl
 
