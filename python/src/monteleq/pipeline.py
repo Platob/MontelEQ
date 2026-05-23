@@ -184,6 +184,10 @@ def refresh_curve_metadata(
         "updated_at": pl.Datetime("us", "UTC"),
     })
 
+    from yggdrasil.execution.expr.builder import col
+
+    curve_ids = tuple(c.id for c in curves)
+
     table = client.sql.table(table_name=table_name).ensure_created(
         CURVE_METADATA_SCHEMA
     )
@@ -191,6 +195,8 @@ def refresh_curve_metadata(
         df,
         mode=Mode.APPEND,
         match_by=["curve_id"],
+        where=col("curve_id").is_in(curve_ids),
+        prune_by="auto",
     )
 
     logger.info(

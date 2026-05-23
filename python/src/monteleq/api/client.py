@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 import pyarrow as pa
 from yggdrasil.data.cast import any_to_datetime, truncate_datetime
 from yggdrasil.data.enums import Mode
+from yggdrasil.execution.expr.builder import col as expr_col
 from yggdrasil.io import URL
 
 from monteleq.api._base_client import BaseClient
@@ -39,6 +40,10 @@ def _get_spark() -> "SparkSession | None":
         return SparkSession.getActiveSession()
     except Exception:
         return None
+
+
+def _curve_id_predicate(curve_ids: tuple[int, ...]) -> Any:
+    return expr_col("curve_id").is_in(curve_ids)
 
 
 class APIClient(BaseClient):
@@ -355,12 +360,13 @@ class APIClient(BaseClient):
                 curves = [cm[n] for n in names if n in cm]
                 if not curves:
                     continue
-                curve_ids = {c.id for c in curves}
+                curve_ids = tuple(c.id for c in curves)
                 self.curation.table(curves[0]).insert(
                     sub,
                     mode=insert_mode,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                    prune_by={"curve_id": curve_ids},
+                    where=_curve_id_predicate(curve_ids),
+                    prune_by="auto",
                 )
             except Exception:
                 logger.exception("Insert failed for table %s", tb)
@@ -419,13 +425,15 @@ class APIClient(BaseClient):
                 curves = [cm[n] for n in names if n in cm]
                 if not curves:
                     continue
+                curve_ids = tuple(c.id for c in curves)
                 self.curation.table(curves[0]).insert(
                     sub,
                     mode=insert_mode,
                     schema_mode=Mode.APPEND,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     wait=False,
-                    prune_values={"curve_id": {c.id for c in curves}},
+                    where=_curve_id_predicate(curve_ids),
+                    prune_by="auto",
                 )
             except Exception:
                 logger.exception("Insert failed for table %s", tb)

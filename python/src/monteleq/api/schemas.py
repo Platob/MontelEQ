@@ -502,7 +502,7 @@ CURVE_METADATA_SCHEMA = schema(
 CURVE_METADATA_SCHEMA["curve_id"] = schema_field(
     "curve_id", pa.int64(), nullable=False,
     metadata={"comment": "xxh3_64 hash of curve_name"},
-    tags={"primary_key": "true"},
+    tags={"primary_key": "true", "partition_by": "true"},
 )
 
 CURVE_METADATA_SCHEMA["curve_name"] = schema_field(
