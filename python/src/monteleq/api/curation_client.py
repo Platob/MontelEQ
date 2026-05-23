@@ -79,11 +79,10 @@ def _canonical_struct_json_expr(df: pl.DataFrame, cols: list[str]) -> pl.Expr:
 def _xxh3_batch(s: pl.Series) -> pl.Series:
     _c = ctypes.c_int64
     _d = xxhash.xxh3_64_intdigest
-    return pl.Series(
-        s.name,
-        [_c(_d(v.encode("utf-8"))).value for v in s.to_list()],
-        dtype=pl.Int64,
-    )
+    _encode = str.encode
+    values = s.to_list()
+    result = [_c(_d(_encode(v, "utf-8"))).value for v in values]
+    return pl.Series(s.name, result, dtype=pl.Int64)
 
 
 def _stable_xxh3_hash_expr(df: pl.DataFrame, cols: list[str]) -> pl.Expr:
@@ -113,46 +112,84 @@ class CurationClient:
 
     def __init__(self, api: "APIClient") -> None:
         self._api = api
+        self._defaults_cache: dict[str, tuple[str | None, str | None, int, str | None]] = {}
 
     # ------------------------------------------------------------------
     # Curvemap defaults helper
     # ------------------------------------------------------------------
+
+    _COMMON_FREQ_SECONDS: dict[str, int] = {
+        "PT1S": 1, "PT5S": 5, "PT10S": 10, "PT15S": 15, "PT30S": 30,
+        "PT1M": 60, "PT5M": 300, "PT10M": 600, "PT15M": 900, "PT30M": 1800,
+        "PT1H": 3600, "PT2H": 7200, "PT3H": 10800, "PT4H": 14400,
+        "PT6H": 21600, "PT12H": 43200,
+        "P1D": 86400, "P1W": 604800, "P1M": 2592000, "P3M": 7776000,
+        "P6M": 15552000, "P1Y": 31536000,
+    }
+
+    def _resolve_freq_seconds(self, freq: str | None) -> int:
+        if not freq:
+            return 0
+        freq_upper = freq.strip().upper()
+        cached = self._COMMON_FREQ_SECONDS.get(freq_upper)
+        if cached is not None:
+            return cached
+        df = pl.DataFrame({"f": [freq_upper]})
+        return df.select(iso_duration_to_seconds_expr("f"))["f"][0]
 
     def _curvemap_defaults(self, curve_names: list[str]) -> pl.DataFrame:
         """
         Build a one-row-per-curve-name DataFrame of metadata defaults,
         to be left-joined onto the response for null-filling.
         """
-        rows = []
+        cache = self._defaults_cache
+        cm = self._api.metadata.curvemap
+
+        names: list[str] = []
+        units: list[str | None] = []
+        denoms: list[str | None] = []
+        freqs: list[int] = []
+        tzs: list[str | None] = []
+
         for name in curve_names:
-            info = self._api.metadata.curvemap.get(name)
+            cached = cache.get(name)
+            if cached is not None:
+                names.append(name)
+                units.append(cached[0])
+                denoms.append(cached[1])
+                freqs.append(cached[2])
+                tzs.append(cached[3])
+                continue
+
+            info = cm.get(name)
             if info is None:
                 continue
-            rows.append({
-                "curve_name": name,
-                "_d_unit": info.unit,
-                "_d_denominator": info.denominator,
-                "_d_resolution_frequency_iso": info.resolution.frequency or "",
-                "_d_resolution_timezone": info.resolution.timezone,
-            })
 
-        if not rows:
+            freq_s = self._resolve_freq_seconds(info.resolution.frequency)
+            entry = (info.unit, info.denominator, freq_s, info.resolution.timezone)
+            cache[name] = entry
+            names.append(name)
+            units.append(entry[0])
+            denoms.append(entry[1])
+            freqs.append(entry[2])
+            tzs.append(entry[3])
+
+        if not names:
             return pl.DataFrame()
 
-        df = pl.DataFrame(
-            rows,
-            schema={
-                "curve_name": pl.Utf8,
-                "_d_unit": pl.Utf8,
-                "_d_denominator": pl.Utf8,
-                "_d_resolution_frequency_iso": pl.Utf8,
-                "_d_resolution_timezone": pl.Utf8,
-            },
-        )
-
-        return df.with_columns(
-            _d_resolution_frequency=iso_duration_to_seconds_expr("_d_resolution_frequency_iso"),
-        ).drop("_d_resolution_frequency_iso")
+        return pl.DataFrame({
+            "curve_name": names,
+            "_d_unit": units,
+            "_d_denominator": denoms,
+            "_d_resolution_frequency": freqs,
+            "_d_resolution_timezone": tzs,
+        }, schema={
+            "curve_name": pl.Utf8,
+            "_d_unit": pl.Utf8,
+            "_d_denominator": pl.Utf8,
+            "_d_resolution_frequency": pl.Int64,
+            "_d_resolution_timezone": pl.Utf8,
+        })
 
     # ------------------------------------------------------------------
     # Table helper

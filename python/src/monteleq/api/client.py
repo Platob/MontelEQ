@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 import pyarrow as pa
 from yggdrasil.data.cast import any_to_datetime, truncate_datetime
 from yggdrasil.data.enums import Mode
+from yggdrasil.execution.expr.builder import col as expr_col
 from yggdrasil.io import URL
 
 from monteleq.api._base_client import BaseClient
@@ -39,6 +40,10 @@ def _get_spark() -> "SparkSession | None":
         return SparkSession.getActiveSession()
     except Exception:
         return None
+
+
+def _curve_id_predicate(curve_ids: tuple[int, ...]) -> Any:
+    return expr_col("curve_id").is_in(curve_ids)
 
 
 class APIClient(BaseClient):
@@ -234,7 +239,9 @@ class APIClient(BaseClient):
         return_data: bool = False,
         spark: "SparkSession | bool | None" = None,
         batch_size: int | None = None,
+        insert_mode: Mode | str | None = None,
     ) -> Iterator[Any]:
+        resolved_mode = self._resolve_insert_mode(insert_mode)
         spark_session = self._resolve_spark(spark)
         use_spark = spark_session is not None
 
@@ -253,12 +260,14 @@ class APIClient(BaseClient):
                     batch,
                     insert_all=insert_all,
                     return_data=return_data,
+                    insert_mode=resolved_mode,
                 )
             else:
                 yield from self._curate_batch_polars(
                     batch,
                     insert_all=insert_all,
                     return_data=return_data,
+                    insert_mode=resolved_mode,
                 )
 
     # ------------------------------------------------------------------
@@ -273,12 +282,18 @@ class APIClient(BaseClient):
         raise_error: bool = False,
         batch_size: int | None = None,
         insert_all: bool = False,
+        insert_mode: Mode | str | None = None,
     ) -> dict[str, int | float]:
         """Distributed fetch → curate → insert pipeline.
 
         When ``spark=True`` (default), auto-detects the active SparkSession.
         When ``spark=False`` or ``spark=None``, uses the Polars path.
         A SparkSession instance can be passed directly.
+
+        ``insert_mode`` controls the write mode for curated Delta table
+        inserts.  Accepts a ``Mode`` enum value or a string
+        (``"append"``, ``"overwrite"``, ``"upsert"``).
+        Defaults to ``Mode.APPEND``.
         """
         t0 = time.perf_counter()
         stats: dict[str, int | float] = {"fetched": 0, "curated": 0, "tables": 0}
@@ -290,6 +305,7 @@ class APIClient(BaseClient):
             return_data=False,
             spark=spark,
             batch_size=batch_size,
+            insert_mode=insert_mode,
         ):
             stats["fetched"] += 1
 
@@ -310,6 +326,7 @@ class APIClient(BaseClient):
         *,
         insert_all: bool,
         return_data: bool,
+        insert_mode: Mode = Mode.APPEND,
     ) -> Iterator[Any]:
         if insert_all:
             base = batch.to_dataframe()
@@ -325,11 +342,12 @@ class APIClient(BaseClient):
             _["curve_name"]
             for _ in curated.select("curve_name").distinct().collect()
         ]
+        cm = self.metadata.curvemap
         groups: dict[str, list[str]] = {}
         for n in curve_names:
-            matches = self.metadata.curves(name=n)
-            if matches:
-                tb = matches[0].table_name(prefix="curated_")
+            c = cm.get(n)
+            if c is not None:
+                tb = c.table_name(prefix="curated_")
                 groups.setdefault(tb, []).append(n)
 
         for tb, names in groups.items():
@@ -339,13 +357,16 @@ class APIClient(BaseClient):
             if sub.limit(1).count() == 0:
                 continue
             try:
-                curves = self.metadata.curves(name=names)
-                curve_ids = {c.id for c in curves}
+                curves = [cm[n] for n in names if n in cm]
+                if not curves:
+                    continue
+                curve_ids = tuple(c.id for c in curves)
                 self.curation.table(curves[0]).insert(
                     sub,
-                    mode=Mode.APPEND,
+                    mode=insert_mode,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                    prune_by={"curve_id": curve_ids},
+                    where=_curve_id_predicate(curve_ids),
+                    prune_by="auto",
                 )
             except Exception:
                 logger.exception("Insert failed for table %s", tb)
@@ -363,31 +384,37 @@ class APIClient(BaseClient):
         *,
         insert_all: bool,
         return_data: bool,
+        insert_mode: Mode = Mode.APPEND,
     ) -> Iterator[polars.DataFrame]:
         if insert_all:
             responses = batch.iter_responses()
         else:
             responses = batch.new_responses()
 
-        curated: polars.DataFrame | None = None
+        curated_parts: list[polars.DataFrame] = []
         for response in responses:
             if not response.ok:
                 continue
             df = self.curation.curate(response)
             if df.height == 0:
                 continue
-            curated = df if curated is None else polars.concat(
-                [curated, df], how="diagonal_relaxed",
-            )
+            curated_parts.append(df)
 
-        if curated is None:
+        if not curated_parts:
             return
 
+        curated = (
+            curated_parts[0]
+            if len(curated_parts) == 1
+            else polars.concat(curated_parts, how="diagonal_relaxed")
+        )
+
+        cm = self.metadata.curvemap
         groups: dict[str, list[str]] = {}
         for n in curated["curve_name"].unique().to_list():
-            matches = self.metadata.curves(name=n)
-            if matches:
-                tb = matches[0].table_name(prefix="curated_")
+            c = cm.get(n)
+            if c is not None:
+                tb = c.table_name(prefix="curated_")
                 groups.setdefault(tb, []).append(n)
 
         for tb, names in groups.items():
@@ -395,14 +422,18 @@ class APIClient(BaseClient):
             if sub.height == 0:
                 continue
             try:
-                curves = self.metadata.curves(name=names)
+                curves = [cm[n] for n in names if n in cm]
+                if not curves:
+                    continue
+                curve_ids = tuple(c.id for c in curves)
                 self.curation.table(curves[0]).insert(
                     sub,
-                    mode=Mode.APPEND,
+                    mode=insert_mode,
                     schema_mode=Mode.APPEND,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     wait=False,
-                    prune_values={"curve_id": {c.id for c in curves}},
+                    where=_curve_id_predicate(curve_ids),
+                    prune_by="auto",
                 )
             except Exception:
                 logger.exception("Insert failed for table %s", tb)
@@ -421,6 +452,14 @@ class APIClient(BaseClient):
         if spark is True:
             return _get_spark()
         return spark
+
+    @staticmethod
+    def _resolve_insert_mode(insert_mode: "Mode | str | None") -> Mode:
+        if insert_mode is None:
+            return Mode.APPEND
+        if isinstance(insert_mode, Mode):
+            return insert_mode
+        return Mode[insert_mode.strip().upper()]
 
     # ------------------------------------------------------------------
     # Spark: curate a DataFrame of Responses via mapInArrow

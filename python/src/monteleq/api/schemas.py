@@ -4,7 +4,7 @@ import pyarrow as pa
 import polars as pl
 from yggdrasil.data import field as schema_field, schema
 
-__all__ = ["CURATED_DATA_SCHEMA", "FINAL_SCHEMA", "DATA_SCHEMA"]
+__all__ = ["CURATED_DATA_SCHEMA", "CURVE_METADATA_SCHEMA", "FINAL_SCHEMA", "DATA_SCHEMA"]
 
 # ---------------------------------------------------------------------------
 # Arrow schema
@@ -476,6 +476,119 @@ CURATED_DATA_SCHEMA["period"] = schema_field(
     nullable=True,
     metadata={"comment": "Delivery period label for OHLC forward curves"},
     tags={"entity": "series", "group": "payload"},
+)
+
+# ---------------------------------------------------------------------------
+# Curve metadata referential — one row per curve in the catalog
+# ---------------------------------------------------------------------------
+
+CURVE_METADATA_SCHEMA = schema(
+    fields=[],
+    metadata={
+        "comment": (
+            "EnergyQuantified curve metadata referential. "
+            "One row per curve, refreshed during the plan stage. "
+            "Maps each curve to its curated Delta table via table_category."
+        ),
+    },
+    tags={
+        "domain": "energy",
+        "entity": "curve.metadata",
+        "layer": "silver",
+        "namespace": "monteleq.pipeline",
+    },
+)
+
+CURVE_METADATA_SCHEMA["curve_id"] = schema_field(
+    "curve_id", pa.int64(), nullable=False,
+    metadata={"comment": "xxh3_64 hash of curve_name"},
+    tags={"primary_key": "true", "partition_by": "true"},
+)
+
+CURVE_METADATA_SCHEMA["curve_name"] = schema_field(
+    "curve_name", pa.string(), nullable=False,
+    metadata={"comment": "Unique EnergyQuantified curve name"},
+)
+
+CURVE_METADATA_SCHEMA["curve_type"] = schema_field(
+    "curve_type", pa.string(), nullable=False,
+    metadata={"comment": "EnergyQuantified curve type"},
+)
+
+CURVE_METADATA_SCHEMA["curve_data_type"] = schema_field(
+    "curve_data_type", pa.string(), nullable=False,
+    metadata={"comment": "Vendor data type"},
+)
+
+CURVE_METADATA_SCHEMA["curve_area"] = schema_field(
+    "curve_area", pa.string(), nullable=True,
+    metadata={"comment": "Primary curve area"},
+)
+
+CURVE_METADATA_SCHEMA["curve_area_sink"] = schema_field(
+    "curve_area_sink", pa.string(), nullable=True,
+    metadata={"comment": "Sink area"},
+)
+
+CURVE_METADATA_SCHEMA["curve_commodity"] = schema_field(
+    "curve_commodity", pa.string(), nullable=True,
+    metadata={"comment": "Commodity"},
+)
+
+CURVE_METADATA_SCHEMA["curve_source"] = schema_field(
+    "curve_source", pa.string(), nullable=True,
+    metadata={"comment": "Vendor source"},
+)
+
+CURVE_METADATA_SCHEMA["curve_unit"] = schema_field(
+    "curve_unit", pa.string(), nullable=True,
+    metadata={"comment": "Unit at curve metadata level"},
+)
+
+CURVE_METADATA_SCHEMA["curve_denominator"] = schema_field(
+    "curve_denominator", pa.string(), nullable=True,
+    metadata={"comment": "Denominator unit"},
+)
+
+CURVE_METADATA_SCHEMA["curve_categories"] = schema_field(
+    "curve_categories", pa.list_(pa.string()), nullable=True,
+    metadata={"comment": "Ordered list of vendor curve categories"},
+)
+
+CURVE_METADATA_SCHEMA["curve_resolution_frequency"] = schema_field(
+    "curve_resolution_frequency", pa.string(), nullable=True,
+    metadata={"comment": "ISO-8601 resolution frequency"},
+)
+
+CURVE_METADATA_SCHEMA["curve_resolution_timezone"] = schema_field(
+    "curve_resolution_timezone", pa.string(), nullable=True,
+    metadata={"comment": "Resolution timezone"},
+)
+
+CURVE_METADATA_SCHEMA["curve_access_by"] = schema_field(
+    "curve_access_by", pa.string(), nullable=True,
+    metadata={"comment": "Access scope"},
+)
+
+CURVE_METADATA_SCHEMA["curve_access_package"] = schema_field(
+    "curve_access_package", pa.string(), nullable=True,
+    metadata={"comment": "Subscription package"},
+)
+
+CURVE_METADATA_SCHEMA["curve_instance_issued_timezone"] = schema_field(
+    "curve_instance_issued_timezone", pa.string(), nullable=True,
+    metadata={"comment": "Instance issued timezone at curve level"},
+)
+
+CURVE_METADATA_SCHEMA["table_category"] = schema_field(
+    "table_category", pa.string(), nullable=False,
+    metadata={"comment": "Destination Delta table name (curated_<data_type>_<curve_type>_<categories>)"},
+    tags={"group": "routing"},
+)
+
+CURVE_METADATA_SCHEMA["updated_at"] = schema_field(
+    "updated_at", pa.timestamp("us", "UTC"), nullable=False,
+    metadata={"comment": "UTC timestamp of the last metadata refresh"},
 )
 
 # ---------------------------------------------------------------------------

@@ -1,14 +1,43 @@
+# Databricks Asset Bundle for the MontelEQ pipeline. Single unified job:
+#
+#   monteleq_ingestion
+#       plan → ingest_by_category (per-category fan-out)
+#
+#       Supports two modes via the `latest` job parameter:
+#
+#       latest=true (default, scheduled every hour):
+#           `plan` resolves categories from the curve catalog.
+#           `ingest_by_category` fetches the last `period_days`,
+#           appends to curated_* tables.
+#
+#       latest=false (manual backfill):
+#           Same plan step, but `ingest_by_category` uses explicit
+#           `start`/`end` window.  `mode` can be set to `overwrite`.
+#
+#   Manual backfill example:
+#
+#   databricks bundle run -t prd monteleq_ingestion \
+#       --params latest=false \
+#       --params start=2024-01-01T00:00:00Z \
+#       --params end=2024-06-30T23:59:59Z \
+#       --params mode=overwrite \
+#       --profile monteleq-prd
+
 bundle:
   name: monteleq
 
 variables:
   catalog_name:
+    description: "Unity Catalog name."
     default: trading_tgp_prd
   schema_name:
+    description: "Schema within the catalog."
     default: src_monteleq
   cluster_id:
+    description: "Cluster for HTTP-heavy raw+curate work."
     default: 0522-063219-lfvirtho
   period_days:
+    description: "Lookback window in days when latest=true."
     default: "60"
 
 workspace:
@@ -33,12 +62,20 @@ resources:
         timezone_id: UTC
 
       parameters:
+        - name: latest
+          default: "true"
+        - name: start
+          default: ""
+        - name: end
+          default: ""
         - name: catalog_name
           default: ${var.catalog_name}
         - name: schema_name
           default: ${var.schema_name}
         - name: period_days
           default: ${var.period_days}
+        - name: mode
+          default: append
 
       tasks:
         - task_key: plan
@@ -47,6 +84,7 @@ resources:
             notebook_path: ./notebooks/plan.py
             base_parameters:
               catalog_name: "{{job.parameters.catalog_name}}"
+              schema_name: "{{job.parameters.schema_name}}"
           libraries:
             - whl: ../dist/*.whl
 
@@ -62,8 +100,13 @@ resources:
                 notebook_path: ./notebooks/ingest_by_category.py
                 base_parameters:
                   curve_category: "{{input}}"
+                  latest: "{{job.parameters.latest}}"
+                  start: "{{job.parameters.start}}"
+                  end: "{{job.parameters.end}}"
                   catalog_name: "{{job.parameters.catalog_name}}"
+                  schema_name: "{{job.parameters.schema_name}}"
                   period_days: "{{job.parameters.period_days}}"
+                  mode: "{{job.parameters.mode}}"
               libraries:
                 - whl: ../dist/*.whl
 
