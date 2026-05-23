@@ -2,44 +2,22 @@
 monteleq.api.client
 ===================
 
-Main entry-point for the Meteologica / EnergyQuantified API.
-
-``APIClient`` extends ``BaseClient`` (which handles raw HTTP + auth) and wires
-together a set of focused sub-clients, plus exposes high-level fetch/curate
-methods for all curve types directly on itself:
-
-.. code-block:: python
-
-    client = APIClient()
-
-    # Metadata
-    client.metadata.curves(curve_type="TIMESERIES")
-
-    # Low-level sub-client fetches (yield HTTPResponse)
-    for resp in client.timeseries.fetch("Hydro NO Total >", begin="2024-01-01"):
-        ...
-
-    # High-level curate (yields curated DataFrames)
-    for df in client.curate("Hydro NO Total >", begin="2024-01-01"):
-        print(df.shape)
-
-    # Events
-    for event in client.events.stream():
-        df = client.events.fetch(event)
+Main entry-point for the MontelEQ / EnergyQuantified API.
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from typing import Iterable, Any, Iterator
+import time
+from typing import Iterable, Any, Iterator, TYPE_CHECKING
 
 import polars
+
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession, DataFrame as SparkDataFrame
 import pyarrow as pa
 from yggdrasil.data.cast import any_to_datetime, truncate_datetime
 from yggdrasil.data.enums import Mode
-from yggdrasil.environ import PyEnv
 from yggdrasil.io import URL
 
 from monteleq.api._base_client import BaseClient
@@ -48,22 +26,23 @@ from monteleq.api.events_client import EventsClient
 from monteleq.api.metadata_client import MetadataClient
 from monteleq.api.request import CurveRequest, CurveRequestsArg
 from monteleq.api.schemas import CURATED_DATA_SCHEMA
-from monteleq.model import Curve, Instance, DEFAULT_ISSUE_INTERVAL
+from monteleq.model import Instance, DEFAULT_ISSUE_INTERVAL
 
 __all__ = ["APIClient"]
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class APIClient(BaseClient):
-    """
-    Authenticated client for the Meteologica / EnergyQuantified API.
+def _get_spark() -> "SparkSession | None":
+    try:
+        from pyspark.sql import SparkSession
+        return SparkSession.getActiveSession()
+    except Exception:
+        return None
 
-    Inherits all HTTP + auth infrastructure from ``BaseClient``, exposes
-    focused sub-clients as attributes, and provides high-level curate methods
-    for all curve types directly.
-    """
+
+class APIClient(BaseClient):
+    """Authenticated client for the MontelEQ / EnergyQuantified API."""
 
     def __init__(
         self,
@@ -72,34 +51,51 @@ class APIClient(BaseClient):
         catalog_name: str | None = None,
         schema_name: str | None = None,
         mode: str | None = None,
-        **kwargs,
-    ):
+        verify: bool = True,
+        pool_maxsize: int = 10,
+    ) -> None:
         super().__init__(
             base_url,
-            catalog_name=catalog_name, schema_name=schema_name,
-            mode=mode, **kwargs
+            catalog_name=catalog_name,
+            schema_name=schema_name,
+            mode=mode,
+            verify=verify,
+            pool_maxsize=pool_maxsize,
         )
         self.metadata = MetadataClient(self)
         self.events = EventsClient(self)
         self.curation = CurationClient(self)
 
     # ------------------------------------------------------------------
-    # Single-curve fetch (raw HTTPResponse generator)
+    # Instance listing
     # ------------------------------------------------------------------
 
     def list_instances(
         self,
-        requests: CurveRequest | Curve | str | Iterable[CurveRequest],
-        **options
-    ):
+        requests: CurveRequestsArg,
+        *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
+        raise_error: bool = True,
+    ) -> Iterator[Instance]:
         now = dt.datetime.now(tz=dt.timezone.utc)
 
-        for request in CurveRequest.iterate(requests, client=self, **options):
-            issued_at_latest = (
+        for request in CurveRequest.iterate(
+            requests,
+            client=self,
+            begin=begin,
+            end=end,
+            issued_at_earliest=issued_at_earliest,
+            issued_at_latest=issued_at_latest,
+            raise_error=raise_error,
+        ):
+            ial = (
                 any_to_datetime(request.issued_at_latest, tz=dt.timezone.utc)
                 if request.issued_at_latest else now
             )
-            issued_at_earliest = (
+            iae = (
                 any_to_datetime(request.issued_at_earliest, tz=dt.timezone.utc)
                 if request.issued_at_earliest else None
             )
@@ -116,17 +112,15 @@ class APIClient(BaseClient):
 
             logger.debug(
                 "list_instances: curve=%s endpoint=%s latest=%s earliest=%s tags=%s",
-                curve.name, endpoint, issued_at_latest, issued_at_earliest, request.request_tags,
+                curve.name, endpoint, ial, iae, request.request_tags,
             )
 
-            # Snap cursor up to the next interval boundary so the cache key is stable
-            # across calls within the same interval.
             cursor = truncate_datetime(
-                issued_at_latest, interval=DEFAULT_ISSUE_INTERVAL, add_interval=True,
+                ial, interval=DEFAULT_ISSUE_INTERVAL, add_interval=True,
             )
             floor_earliest = (
-                truncate_datetime(issued_at_earliest, interval=DEFAULT_ISSUE_INTERVAL)
-                if issued_at_earliest is not None else None
+                truncate_datetime(iae, interval=DEFAULT_ISSUE_INTERVAL)
+                if iae is not None else None
             )
 
             seen: set[tuple[dt.datetime, str | None]] = set()
@@ -166,10 +160,9 @@ class APIClient(BaseClient):
                     if oldest_in_batch is None or instance.issued_at < oldest_in_batch:
                         oldest_in_batch = instance.issued_at
 
-                    # Apply the *original*, untruncated user bounds when filtering yields
-                    if issued_at_earliest is not None and instance.issued_at < issued_at_earliest:
+                    if iae is not None and instance.issued_at < iae:
                         continue
-                    if instance.issued_at > issued_at_latest:
+                    if instance.issued_at > ial:
                         continue
 
                     key = (instance.issued_at, instance.tag)
@@ -187,174 +180,247 @@ class APIClient(BaseClient):
                 if oldest_in_batch is None:
                     break
 
-                # Snap the next cursor *down* to an interval boundary. This both stabilizes
-                # the cache key and guarantees monotonic decrease (since rows[*].issued_at < cursor
-                # and we floor strictly below cursor's boundary).
                 next_cursor = truncate_datetime(oldest_in_batch, interval=DEFAULT_ISSUE_INTERVAL)
                 if next_cursor >= cursor:
-                    # oldest_in_batch landed on the same boundary as cursor — step one interval
-                    # back to make progress.
                     next_cursor = cursor - DEFAULT_ISSUE_INTERVAL
                 cursor = next_cursor
+
+    # ------------------------------------------------------------------
+    # Fetch raw HTTP responses
+    # ------------------------------------------------------------------
 
     def fetch_curves(
         self,
         requests: CurveRequestsArg,
         *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
-        **options: dict[str, Any],
-    ):
-        # CurveRequest now IS-A PreparedRequest, so http_requests yields
-        # objects send_many can consume directly — no .http_request() adapter.
+        spark: "SparkSession | bool | None" = None,
+        batch_size: int | None = None,
+    ) -> Iterator[Any]:
+        spark_session = self._resolve_spark(spark)
         yield from self.send_many_batches(
             CurveRequest.http_requests(
-                requests, client=self,
-                **options
+                requests,
+                client=self,
+                begin=begin,
+                end=end,
+                issued_at_earliest=issued_at_earliest,
+                issued_at_latest=issued_at_latest,
+                raise_error=raise_error,
             ),
             raise_error=raise_error,
+            spark_session=spark_session,
+            batch_size=batch_size,
         )
 
     # ------------------------------------------------------------------
-    # Single-curve curate (fetches + transforms → curated DataFrame)
+    # Curate: fetch + transform → curated DataFrames + optional insert
     # ------------------------------------------------------------------
 
     def curate_curves(
         self,
         requests: CurveRequestsArg,
         *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
-        max_workers: int | None = None,
         insert_all: bool = False,
         return_data: bool = False,
-        **options: dict[str, Any],
-    ):
+        spark: "SparkSession | bool | None" = None,
+        batch_size: int | None = None,
+    ) -> Iterator[Any]:
+        spark_session = self._resolve_spark(spark)
+        use_spark = spark_session is not None
+
         for batch in self.fetch_curves(
             requests,
+            begin=begin,
+            end=end,
+            issued_at_earliest=issued_at_earliest,
+            issued_at_latest=issued_at_latest,
             raise_error=raise_error,
-            **options
+            spark=spark_session,
+            batch_size=batch_size,
         ):
-            if PyEnv.in_databricks():
-                if insert_all:
-                    base = batch.to_dataframe()
-                elif batch.new_hits is None:
-                    continue
-                else:
-                    base = batch.new_hits.to_spark_frame()
-                curated = self.curate_responses_spark(base).cache()
-                # Materialize once so threads read from the cache instead of racing
-                # to populate it
-                curated.count()
-
-                sc = curated.sparkSession.sparkContext
-                sc.setLocalProperty("spark.scheduler.mode", "FAIR")
-
-                curve_names = [
-                    _["curve_name"]
-                    for _ in curated.select("curve_name").distinct().collect()
-                ]
-                groups: dict[str, list[str]] = {}
-                for n in curve_names:
-                    tb = self.metadata.curves(name=n)[0].table_name(prefix="curated_")
-                    groups.setdefault(tb, []).append(n)
-
-                def _spark_insert(tb: str, names: list[str]) -> str:
-                    sc.setLocalProperty("spark.scheduler.pool", tb)
-                    sub = curated.filter(
-                        f"curve_name in ({', '.join(repr(n) for n in names)})"
-                    )
-                    if sub.limit(1).count() == 0:
-                        return tb
-                    curves = self.metadata.curves(name=names)
-                    curve_ids = {c.id for c in curves}
-                    self.curation.table(curves[0]).insert(
-                        sub,
-                        mode=Mode.APPEND,
-                        match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                        prune_by={"curve_id": curve_ids},
-                    )
-                    return tb
-
-                if groups:
-                    with ThreadPoolExecutor(max_workers=max_workers or len(groups)) as pool:
-                        futures = {
-                            pool.submit(_spark_insert, tb, names): tb
-                            for tb, names in groups.items()
-                        }
-                        for fut in as_completed(futures):
-                            fut.result()
-
-                if return_data:
-                    yield curated
-
+            if use_spark:
+                yield from self._curate_batch_spark(
+                    batch,
+                    insert_all=insert_all,
+                    return_data=return_data,
+                )
             else:
-                if insert_all:
-                    responses = batch.iter_responses()
-                else:
-                    responses = batch.new_responses()
-                curated = None
-                for response in responses:
-                    if not response.ok:
-                        continue
-                    df = self.curation.curate(response)
-                    if df.height == 0:
-                        continue
-                    curated = df if curated is None else polars.concat(
-                        [curated, df], how="diagonal_relaxed",
-                    )
+                yield from self._curate_batch_polars(
+                    batch,
+                    insert_all=insert_all,
+                    return_data=return_data,
+                )
 
-                if curated is None:
-                    continue
+    # ------------------------------------------------------------------
+    # Spark-distributed ingestion (convenience wrapper)
+    # ------------------------------------------------------------------
 
-                # Group curve_names by target curated_* table. Multiple curves may
-                # share a physical table; collapsing first means one insert per
-                # table, not one per curve.
-                groups: dict[str, list[str]] = {}
-                for n in curated["curve_name"].unique().to_list():
-                    tb = self.metadata.curves(name=n)[0].table_name(prefix="curated_")
-                    groups.setdefault(tb, []).append(n)
+    def ingest_spark(
+        self,
+        requests: CurveRequestsArg,
+        *,
+        spark: "SparkSession | bool | None" = True,
+        raise_error: bool = False,
+        batch_size: int | None = None,
+        insert_all: bool = False,
+    ) -> dict[str, int | float]:
+        """Distributed fetch → curate → insert pipeline.
 
-                def _polars_insert(tb: str, names: list[str]) -> str:
-                    sub = curated.filter(polars.col("curve_name").is_in(names))
-                    if sub.height == 0:
-                        return tb
-                    curves = self.metadata.curves(name=names)
-                    self.curation.table(curves[0]).insert(
-                        sub,
-                        mode=Mode.APPEND,
-                        schema_mode=Mode.APPEND,
-                        match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                        wait=False,
-                        prune_values={"curve_id": {c.id for c in curves}},
-                    )
-                    return tb
+        When ``spark=True`` (default), auto-detects the active SparkSession.
+        When ``spark=False`` or ``spark=None``, uses the Polars path.
+        A SparkSession instance can be passed directly.
+        """
+        t0 = time.perf_counter()
+        stats: dict[str, int | float] = {"fetched": 0, "curated": 0, "tables": 0}
 
-                if groups:
-                    with ThreadPoolExecutor(max_workers=max_workers or len(groups)) as pool:
-                        futures = {
-                            pool.submit(_polars_insert, tb, names): tb
-                            for tb, names in groups.items()
-                        }
-                        for fut in as_completed(futures):
-                            fut.result()
+        for _ in self.curate_curves(
+            requests,
+            raise_error=raise_error,
+            insert_all=insert_all,
+            return_data=False,
+            spark=spark,
+            batch_size=batch_size,
+        ):
+            stats["fetched"] += 1
 
-                if return_data:
-                    yield curated
+        stats["elapsed"] = round(time.perf_counter() - t0, 2)
+        logger.info(
+            "ingest complete: %.2fs elapsed",
+            stats["elapsed"],
+        )
+        return stats
 
-                    for response in batch.local_responses():
-                        if not response.ok:
-                            continue
-                        df = self.curation.curate(response)
-                        if df.height == 0:
-                            continue
-                        yield df
+    # ------------------------------------------------------------------
+    # Internal: Spark curate path
+    # ------------------------------------------------------------------
 
-                    for response in batch.remote_responses():
-                        if not response.ok:
-                            continue
-                        df = self.curation.curate(response)
-                        if df.height == 0:
-                            continue
-                        yield df
+    def _curate_batch_spark(
+        self,
+        batch: Any,
+        *,
+        insert_all: bool,
+        return_data: bool,
+    ) -> Iterator[Any]:
+        if insert_all:
+            base = batch.to_dataframe()
+        elif batch.new_hits is None:
+            return
+        else:
+            base = batch.new_hits.to_spark_frame()
+
+        curated = self.curate_responses_spark(base).cache()
+        curated.count()
+
+        curve_names = [
+            _["curve_name"]
+            for _ in curated.select("curve_name").distinct().collect()
+        ]
+        groups: dict[str, list[str]] = {}
+        for n in curve_names:
+            matches = self.metadata.curves(name=n)
+            if matches:
+                tb = matches[0].table_name(prefix="curated_")
+                groups.setdefault(tb, []).append(n)
+
+        for tb, names in groups.items():
+            sub = curated.filter(
+                f"curve_name in ({', '.join(repr(n) for n in names)})"
+            )
+            if sub.limit(1).count() == 0:
+                continue
+            try:
+                curves = self.metadata.curves(name=names)
+                curve_ids = {c.id for c in curves}
+                self.curation.table(curves[0]).insert(
+                    sub,
+                    mode=Mode.APPEND,
+                    match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
+                    prune_by={"curve_id": curve_ids},
+                )
+            except Exception:
+                logger.exception("Insert failed for table %s", tb)
+
+        if return_data:
+            yield curated
+
+    # ------------------------------------------------------------------
+    # Internal: Polars curate path
+    # ------------------------------------------------------------------
+
+    def _curate_batch_polars(
+        self,
+        batch: Any,
+        *,
+        insert_all: bool,
+        return_data: bool,
+    ) -> Iterator[polars.DataFrame]:
+        if insert_all:
+            responses = batch.iter_responses()
+        else:
+            responses = batch.new_responses()
+
+        curated: polars.DataFrame | None = None
+        for response in responses:
+            if not response.ok:
+                continue
+            df = self.curation.curate(response)
+            if df.height == 0:
+                continue
+            curated = df if curated is None else polars.concat(
+                [curated, df], how="diagonal_relaxed",
+            )
+
+        if curated is None:
+            return
+
+        groups: dict[str, list[str]] = {}
+        for n in curated["curve_name"].unique().to_list():
+            matches = self.metadata.curves(name=n)
+            if matches:
+                tb = matches[0].table_name(prefix="curated_")
+                groups.setdefault(tb, []).append(n)
+
+        for tb, names in groups.items():
+            sub = curated.filter(polars.col("curve_name").is_in(names))
+            if sub.height == 0:
+                continue
+            try:
+                curves = self.metadata.curves(name=names)
+                self.curation.table(curves[0]).insert(
+                    sub,
+                    mode=Mode.APPEND,
+                    schema_mode=Mode.APPEND,
+                    match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
+                    wait=False,
+                    prune_values={"curve_id": {c.id for c in curves}},
+                )
+            except Exception:
+                logger.exception("Insert failed for table %s", tb)
+
+        if return_data:
+            yield curated
+
+    # ------------------------------------------------------------------
+    # Resolve spark argument
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_spark(spark: "SparkSession | bool | None") -> "SparkSession | None":
+        if spark is None or spark is False:
+            return None
+        if spark is True:
+            return _get_spark()
+        return spark
 
     # ------------------------------------------------------------------
     # Spark: curate a DataFrame of Responses via mapInArrow
@@ -366,37 +432,7 @@ class APIClient(BaseClient):
         *,
         barrier: bool = False,
     ) -> "SparkDataFrame":
-        """Curate a Spark DataFrame whose rows match ``RESPONSE_SCHEMA``.
-
-        Each partition is reconstructed into ``Response`` objects via
-        :meth:`Response.from_arrow_tabular`, fed through
-        :meth:`CurationClient.curate`, and emitted as Arrow batches
-        matching ``curated_schema``.
-
-        Parameters
-        ----------
-        df:
-            Input Spark DataFrame. Its schema must be a superset of
-            ``RESPONSE_SCHEMA`` — extra columns are ignored, missing
-            columns surface as ``None`` per ``from_arrow_tabular``.
-        barrier:
-            Forwarded to ``mapInArrow``. Leave ``False`` unless you need
-            barrier-mode scheduling.
-
-        Returns
-        -------
-        SparkDataFrame
-            A Spark DataFrame with ``curated_schema``. Nothing is
-            inserted; the caller writes wherever they want.
-
-        Notes
-        -----
-        Responses are buffered *within each partition* per ``curve_name``
-        and flushed when the partition ends — the same per-curve concat-
-        then-curate pattern as :meth:`curate_curves`, but bounded to a
-        single partition rather than the whole stream. No cross-partition
-        coordination; partitions curate independently.
-        """
+        """Curate a Spark DataFrame whose rows match ``RESPONSE_SCHEMA``."""
         spark_curated_schema = CURATED_DATA_SCHEMA.to_spark_schema()
 
         ser_client = self

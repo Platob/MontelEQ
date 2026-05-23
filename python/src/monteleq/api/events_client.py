@@ -20,6 +20,7 @@ from monteleq.model import Curve
 from monteleq.api.request import CurveRequest
 
 if TYPE_CHECKING:
+    from energyquantified import EnergyQuantified
     from monteleq.api.client import APIClient
 
 __all__ = ["EventsClient"]
@@ -48,7 +49,7 @@ class EventsClient:
         self,
         filters: CurveAttributeFilter,
         last_id: Optional[str] = None,
-    ):
+    ) -> "EnergyQuantified":
         logger.info(
             "Connecting to EQ event stream: filters=%s last_id=%s",
             filters,
@@ -64,7 +65,7 @@ class EventsClient:
         return client
 
     @staticmethod
-    def _safe_disconnect(client) -> None:
+    def _safe_disconnect(client: "EnergyQuantified | None") -> None:
         if client is None:
             return
         try:

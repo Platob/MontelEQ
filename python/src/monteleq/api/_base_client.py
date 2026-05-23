@@ -2,35 +2,30 @@
 from __future__ import annotations
 
 import datetime as dt
-import os
-from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from yggdrasil.databricks.sql.engine import SQLEngine
 
 from energyquantified import EnergyQuantified
 from yggdrasil.data.enums import Mode
 from yggdrasil.databricks import DatabricksClient
 from yggdrasil.databricks.table import Table
 from yggdrasil.environ import PyEnv
+from yggdrasil.http_ import HTTPSession
+from yggdrasil.http_.session import Authorization, WaitingConfig
 from yggdrasil.io import URL
-from yggdrasil.io.http_ import HTTPSession
 from yggdrasil.io.send_config import CacheConfig
 
 from monteleq.model import Curve
 
 __all__ = ["BaseClient"]
 
+Headers = dict[str, str] | None
+
 
 class BaseClient(HTTPSession):
-    """
-    Low-level HTTP session wired to Databricks / EnergyQuantified auth.
-
-    Holds shared infrastructure for all sub-clients:
-    - auth/bootstrap
-    - Databricks, EQ client, and SQL accessors
-    - cache normalization
-    - parameter normalization
-    - low-level curve request preparation
-    """
+    """Low-level HTTP session wired to Databricks / EnergyQuantified auth."""
 
     def __init__(
         self,
@@ -40,11 +35,23 @@ class BaseClient(HTTPSession):
         schema_name: str | None = "src_monteleq",
         mode: str | None = None,
         databricks: Optional[DatabricksClient] = None,
-        **kwargs: Optional[dict]
-    ):
+        verify: bool = True,
+        pool_maxsize: int = 10,
+        headers: Headers = None,
+        waiting: WaitingConfig | None = None,
+        auth: Authorization | None = None,
+    ) -> None:
+        kw: dict = {}
+        if waiting is not None:
+            kw["waiting"] = waiting
+        if auth is not None:
+            kw["auth"] = auth
         super().__init__(
             base_url=base_url or URL.from_str("https://app.energyquantified.com/api/"),
-            **kwargs
+            verify=verify,
+            pool_maxsize=pool_maxsize,
+            headers=headers,
+            **kw,
         )
         self.catalog_name = catalog_name or "trading_tgp_dev"
         self.schema_name = schema_name or "src_monteleq"
@@ -53,7 +60,7 @@ class BaseClient(HTTPSession):
         self._eqclient = None
         self._auto_init()
 
-    def _auto_init(self):
+    def _auto_init(self) -> None:
         if PyEnv.in_databricks():
             self._databricks = DatabricksClient.current()
         elif self._databricks is None and not self.x_api_key:
@@ -71,15 +78,15 @@ class BaseClient(HTTPSession):
             try:
                 self.x_api_key = self.databricks.secrets["monteleq"]["api_key"].svalue()
                 self.mode = "databricks+api"
-            except Exception as exc:
+            except Exception:
                 self.mode = "databricks"
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict:
         state = super().__getstate__()
         state.pop("_eqclient", None)
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict) -> None:
         state["_eqclient"] = None
         super().__setstate__(state)
         self._auto_init()
@@ -100,7 +107,7 @@ class BaseClient(HTTPSession):
         return EnergyQuantified(api_key=self.x_api_key, ssl_verify=False)
 
     @property
-    def sql(self):
+    def sql(self) -> "SQLEngine":
         return self.databricks.sql(
             catalog_name=self.catalog_name,
             schema_name=self.schema_name,
@@ -127,8 +134,8 @@ class BaseClient(HTTPSession):
     def cache_configs(
         self,
         curve: Curve,
-        upsert: bool
-    ):
+        upsert: bool,
+    ) -> tuple[CacheConfig, CacheConfig]:
         local_cache = CacheConfig(
             received_ttl=dt.timedelta(days=2),
             mode=Mode.UPSERT if upsert else Mode.APPEND,

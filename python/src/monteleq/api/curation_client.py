@@ -5,11 +5,14 @@ import ctypes
 import datetime as dt
 from typing import Optional, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from yggdrasil.databricks.table import Table
+
 import polars as pl
 import xxhash
 from yggdrasil.data.cast import any_to_datetime
 from yggdrasil.data.enums.timezone import Timezone
-from yggdrasil.io.http_ import HTTPResponse
+from yggdrasil.http_ import HTTPResponse
 
 from monteleq.api.curation_helpers import (
     GAS_DAY_TZ,
@@ -73,10 +76,20 @@ def _canonical_struct_json_expr(df: pl.DataFrame, cols: list[str]) -> pl.Expr:
     ).struct.json_encode()
 
 
+def _xxh3_batch(s: pl.Series) -> pl.Series:
+    _c = ctypes.c_int64
+    _d = xxhash.xxh3_64_intdigest
+    return pl.Series(
+        s.name,
+        [_c(_d(v.encode("utf-8"))).value for v in s.to_list()],
+        dtype=pl.Int64,
+    )
+
+
 def _stable_xxh3_hash_expr(df: pl.DataFrame, cols: list[str]) -> pl.Expr:
     """Return signed Int64 xxh3_64 hash expression over canonical JSON payload."""
-    return _canonical_struct_json_expr(df, cols).map_elements(
-        _xxh3_64_signed,
+    return _canonical_struct_json_expr(df, cols).map_batches(
+        _xxh3_batch,
         return_dtype=pl.Int64,
     )
 
@@ -145,7 +158,7 @@ class CurationClient:
     # Table helper
     # ------------------------------------------------------------------
 
-    def table(self, curve: Curve, prefix: str = "curated_"):
+    def table(self, curve: Curve | str, prefix: str = "curated_") -> "Table":
         """Return the Databricks Delta table for a curated curve dataset (creates if absent)."""
         if not isinstance(curve, Curve):
             curve = self._api.metadata.curves(name=curve)[0]
@@ -164,34 +177,10 @@ class CurationClient:
         *,
         begin: Optional[dt.datetime | dt.date | str] = None,
         end: Optional[dt.datetime | dt.date | str] = None,
-        **media_options,
     ) -> pl.DataFrame:
-        """
-        Transform a raw API response (or DataFrame) into the curated schema.
-
-        Parameters
-        ----------
-        response :
-            Raw HTTP response, or a pre-parsed DataFrame / LazyFrame.
-        begin / end :
-            Optional UTC-aware datetime boundaries to **filter** the curated
-            data rows. Only data whose ``from_timestamp`` falls within
-            ``[begin, end)`` is kept. Accepts ``datetime``, ``date``, or
-            an ISO-format string. When ``None`` the corresponding bound
-            is unbounded.
-
-        Steps:
-        1. Parse HTTP response → Polars DataFrame when needed.
-        2. Unnest ``resolution``, ``unit``, ``instance``, ``curve``,
-           ``curve_access``, and ``curve_resolution`` struct columns.
-        3. Handle scenario timeseries (zip ``scenario_names`` × ``data_s``).
-        4. Normalise data rows via ``make_data``.
-        5. **Filter** rows by ``[begin, end)`` on ``data.from_timestamp``
-           when either bound is supplied.
-        6. Group by logical series identity and aggregate ``data`` into lists.
-        """
+        """Transform a raw API response (or DataFrame) into the curated schema."""
         if isinstance(response, HTTPResponse):
-            response = response.to_polars(parse=True, **media_options)
+            response = response.to_polars(parse=True)
 
         if isinstance(response, pl.LazyFrame):
             response = response.collect()
@@ -269,8 +258,8 @@ class CurationClient:
         # -- curve_id (stable xxh3_64 of canonical curve identity) -------
         if "curve_id" not in response.columns and "curve_name" in response.columns:
             response = response.with_columns(
-                curve_id=pl.col("curve_name").cast(pl.Utf8, strict=False).fill_null("").map_elements(
-                    _xxh3_64_signed,
+                curve_id=pl.col("curve_name").cast(pl.Utf8, strict=False).fill_null("").map_batches(
+                    _xxh3_batch,
                     return_dtype=pl.Int64,
                 )
             )

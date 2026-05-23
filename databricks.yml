@@ -1,0 +1,84 @@
+bundle:
+  name: monteleq
+
+variables:
+  catalog_name:
+    default: trading_tgp_prd
+  schema_name:
+    default: src_monteleq
+  cluster_id:
+    default: 0522-063219-lfvirtho
+  period_days:
+    default: "60"
+
+workspace:
+  host: https://dbc-82edd6f4-1e97.cloud.databricks.com
+
+artifacts:
+  monteleq_wheel:
+    type: whl
+    path: ./python
+
+resources:
+  jobs:
+    monteleq_ingestion:
+      name: monteleq-ingestion
+      max_concurrent_runs: 1
+      tags:
+        package: monteleq
+        pipeline: ingestion
+
+      schedule:
+        quartz_cron_expression: "0 0 * * * ?"
+        timezone_id: UTC
+
+      parameters:
+        - name: catalog_name
+          default: ${var.catalog_name}
+        - name: schema_name
+          default: ${var.schema_name}
+        - name: period_days
+          default: ${var.period_days}
+
+      tasks:
+        - task_key: plan
+          existing_cluster_id: ${var.cluster_id}
+          notebook_task:
+            notebook_path: ./notebooks/plan.py
+            base_parameters:
+              catalog_name: "{{job.parameters.catalog_name}}"
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_by_category
+          depends_on:
+            - task_key: plan
+          existing_cluster_id: ${var.cluster_id}
+          for_each_task:
+            inputs: "{{tasks.plan.values.notebook_output.result}}"
+            task:
+              task_key: ingest_category
+              notebook_task:
+                notebook_path: ./notebooks/ingest_by_category.py
+                base_parameters:
+                  curve_category: "{{input}}"
+                  catalog_name: "{{job.parameters.catalog_name}}"
+                  period_days: "{{job.parameters.period_days}}"
+              libraries:
+                - whl: ./dist/*.whl
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      catalog_name: trading_tgp_dev
+      cluster_id: 0522-063219-lfvirtho
+
+  prod:
+    mode: production
+    variables:
+      catalog_name: trading_tgp_prd
+      cluster_id: 0522-063219-lfvirtho
+    run_as:
+      service_principal_name: monteleq-service-principal
