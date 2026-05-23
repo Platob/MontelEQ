@@ -5,7 +5,7 @@
 # MAGIC Spark-distributed ingestion of EnergyQuantified curves for a single category.
 # MAGIC Called as a downstream task from the plan task.
 # MAGIC
-# MAGIC * **latest=True** (default, scheduled) — uses `period_days` as a
+# MAGIC * **latest=True** (default, scheduled) — uses `period_hours` as a
 # MAGIC   lookback window from now.  Incremental append.
 # MAGIC * **latest=False** (manual backfill) — uses explicit `start`/`end`
 # MAGIC   datetime range.  `mode` can be set to `overwrite` to replace
@@ -26,7 +26,7 @@ class Config(SystemParameters):
     curve_category: str = ""
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
-    period_days: int = 60
+    period_hours: int = 1
     mode: Mode = Mode.APPEND
 
 
@@ -49,7 +49,7 @@ result = ingest_category(
     latest=config.latest,
     start=config.start or None,
     end=config.end or None,
-    period_days=config.period_days,
+    period_hours=config.period_hours,
     insert_mode=config.mode.name if config.mode != Mode.APPEND else None,
 )
 
