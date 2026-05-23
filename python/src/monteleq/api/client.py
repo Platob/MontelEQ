@@ -26,16 +26,23 @@ methods for all curve types directly on itself:
     # Events
     for event in client.events.stream():
         df = client.events.fetch(event)
+
+    # Spark-distributed ingestion (new_hits only)
+    client.ingest_spark(curves, spark_session=spark, begin=start, end=end)
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Iterable, Any, Iterator
+from typing import Iterable, Any, Iterator, TYPE_CHECKING
 
 import polars
+
+if TYPE_CHECKING:
+    from pyspark.sql import SparkSession, DataFrame as SparkDataFrame
 import pyarrow as pa
 from yggdrasil.data.cast import any_to_datetime, truncate_datetime
 from yggdrasil.data.enums import Mode
@@ -355,6 +362,136 @@ class APIClient(BaseClient):
                         if df.height == 0:
                             continue
                         yield df
+
+    # ------------------------------------------------------------------
+    # Spark-distributed ingestion: fetch → curate new_hits → insert
+    # ------------------------------------------------------------------
+
+    def ingest_spark(
+        self,
+        requests: CurveRequestsArg,
+        *,
+        spark_session: "SparkSession",
+        raise_error: bool = False,
+        max_workers: int | None = None,
+        batch_size: int | None = None,
+        insert_all: bool = False,
+    ) -> dict[str, int]:
+        """Distributed fetch → curate → insert pipeline using Spark.
+
+        Leverages ``send_many_batches(spark_session=...)`` to scatter HTTP
+        calls across Spark executors via ``mapInArrow``.  Only ``new_hits``
+        (freshly fetched responses not already in cache) are curated and
+        inserted into the target ``curated_*`` Delta tables.
+
+        Parameters
+        ----------
+        requests :
+            Curves, curve names, or CurveRequest objects to ingest.
+        spark_session :
+            Active SparkSession (Databricks Connect or local).
+        raise_error :
+            Propagate HTTP errors instead of skipping.
+        max_workers :
+            Thread pool size for parallel table inserts.
+        batch_size :
+            Number of requests per send_many_batches batch.
+        insert_all :
+            When True, curate and insert all hits (local + remote + new).
+            Default False curates only new_hits.
+
+        Returns
+        -------
+        dict
+            ``{"fetched": N, "curated": N, "tables": N, "elapsed": seconds}``
+        """
+        t0 = time.perf_counter()
+        stats: dict[str, int] = {"fetched": 0, "curated": 0, "tables": 0}
+
+        prepared = CurveRequest.http_requests(
+            requests, client=self,
+            raise_error=raise_error,
+        )
+
+        send_kwargs: dict[str, Any] = {
+            "raise_error": raise_error,
+            "spark_session": spark_session,
+        }
+        if batch_size is not None:
+            send_kwargs["batch_size"] = batch_size
+
+        for batch in self.send_many_batches(prepared, **send_kwargs):
+            stats["fetched"] += 1
+
+            if insert_all:
+                base = batch.to_dataframe()
+            elif batch.new_hits is None:
+                continue
+            else:
+                base = batch.new_hits.to_spark_frame()
+
+            curated = self.curate_responses_spark(base).cache()
+            row_count = curated.count()
+            if row_count == 0:
+                continue
+
+            stats["curated"] += row_count
+
+            sc = curated.sparkSession.sparkContext
+            sc.setLocalProperty("spark.scheduler.mode", "FAIR")
+
+            curve_names = [
+                _["curve_name"]
+                for _ in curated.select("curve_name").distinct().collect()
+            ]
+            groups: dict[str, list[str]] = {}
+            for n in curve_names:
+                matches = self.metadata.curves(name=n)
+                if matches:
+                    tb = matches[0].table_name(prefix="curated_")
+                    groups.setdefault(tb, []).append(n)
+
+            def _insert(tb: str, names: list[str]) -> str:
+                sc.setLocalProperty("spark.scheduler.pool", tb)
+                sub = curated.filter(
+                    f"curve_name in ({', '.join(repr(n) for n in names)})"
+                )
+                if sub.limit(1).count() == 0:
+                    return tb
+                curves = self.metadata.curves(name=names)
+                curve_ids = {c.id for c in curves}
+                self.curation.table(curves[0]).insert(
+                    sub,
+                    mode=Mode.APPEND,
+                    match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
+                    prune_by={"curve_id": curve_ids},
+                )
+                return tb
+
+            if groups:
+                pool_size = max_workers or len(groups)
+                with ThreadPoolExecutor(max_workers=pool_size) as pool:
+                    futures = {
+                        pool.submit(_insert, tb, names): tb
+                        for tb, names in groups.items()
+                    }
+                    for fut in as_completed(futures):
+                        try:
+                            fut.result()
+                            stats["tables"] += 1
+                        except Exception:
+                            logger.exception(
+                                "Insert failed for table %s", futures[fut]
+                            )
+
+        stats["elapsed"] = round(time.perf_counter() - t0, 2)
+        logger.info(
+            "ingest_spark complete: %d batches fetched, %d rows curated, "
+            "%d tables written in %.2fs",
+            stats["fetched"], stats["curated"],
+            stats["tables"], stats["elapsed"],
+        )
+        return stats
 
     # ------------------------------------------------------------------
     # Spark: curate a DataFrame of Responses via mapInArrow

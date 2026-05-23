@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monteleq"
-version = "0.1.30"
+version = "0.2.0"
 description = "Montel EQ client"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }

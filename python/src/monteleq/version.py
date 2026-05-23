@@ -7,5 +7,5 @@ __all__ = [
     "__version__"
 ]
 
-__version__ = "0.1.30"
+__version__ = "0.2.0"
 __version_info__ = VersionInfo.from_string(__version__)
