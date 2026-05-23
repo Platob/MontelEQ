@@ -2,7 +2,7 @@
 monteleq.api.client
 ===================
 
-Main entry-point for the Meteologica / EnergyQuantified API.
+Main entry-point for the MontelEQ / EnergyQuantified API.
 
 ``APIClient`` extends ``BaseClient`` (which handles raw HTTP + auth) and wires
 together a set of focused sub-clients, plus exposes high-level fetch/curate
@@ -36,7 +36,6 @@ import datetime as dt
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from typing import Iterable, Any, Iterator, TYPE_CHECKING
 
 import polars
@@ -62,10 +61,9 @@ __all__ = ["APIClient"]
 logger = logging.getLogger(__name__)
 
 
-@dataclass
 class APIClient(BaseClient):
     """
-    Authenticated client for the Meteologica / EnergyQuantified API.
+    Authenticated client for the MontelEQ / EnergyQuantified API.
 
     Inherits all HTTP + auth infrastructure from ``BaseClient``, exposes
     focused sub-clients as attributes, and provides high-level curate methods

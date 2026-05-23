@@ -93,13 +93,13 @@ class CurveRequest:
     suitable for ``Session.send`` / ``send_many``.
     """
 
-    curve: Curve = None  # type: ignore[assignment]
+    curve: Curve = field(default_factory=lambda: Curve(name=""))
     begin: dt.datetime | None = None
     end: dt.datetime | None = None
     issued_at: dt.datetime | None = None
     issued_at_earliest: dt.datetime | None = None
     issued_at_latest: dt.datetime | None = None
-    request_tags: list[str] = field(default_factory=list)  # API "tags" query-param
+    request_tags: list[str] = field(default_factory=list)
     limit: int | None = None
     exclude_tags: list[str] = field(default_factory=list)
     ensembles: bool = False
@@ -108,16 +108,13 @@ class CurveRequest:
     frequency: str | None = None
     event_type: EventType | None = None
     raise_error: bool = True
-
-    # Wire-level tags merged into PreparedRequest.tags (distinct from
-    # request_tags which becomes the API "tags" query-param).
     tags: dict[str, str] = field(default_factory=dict)
-
-    # Client back-reference used to resolve cache configs and to fan out
-    # via list_instances during http_requests expansion.
     client: "APIClient | None" = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.curve, Curve):
+            raise TypeError(f"curve must be a Curve instance, got {type(self.curve).__name__}")
+
         now = dt.datetime.now(dt.timezone.utc)
 
         self.end = any_to_datetime(self.end or now, tz=dt.timezone.utc)
@@ -141,7 +138,7 @@ class CurveRequest:
             if isinstance(self.request_tags, str):
                 self.request_tags = [self.request_tags]
             else:
-                self.request_tags = [str(_) for _ in self.request_tags if _]
+                self.request_tags = [str(t) for t in self.request_tags if t]
         else:
             self.request_tags = []
 

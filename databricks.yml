@@ -1,0 +1,206 @@
+bundle:
+  name: monteleq
+
+variables:
+  catalog_name:
+    default: trading_tgp_prd
+  schema_name:
+    default: src_monteleq
+  cluster_id:
+    default: 0522-063219-lfvirtho
+  period_days:
+    default: "60"
+
+workspace:
+  host: https://dbc-82edd6f4-1e97.cloud.databricks.com
+
+artifacts:
+  monteleq_wheel:
+    type: whl
+    path: ./python
+
+resources:
+  jobs:
+    monteleq_ingestion:
+      name: monteleq-ingestion
+      max_concurrent_runs: 1
+      tags:
+        package: monteleq
+        pipeline: ingestion
+
+      schedule:
+        quartz_cron_expression: "0 0 5 * * ?"
+        timezone_id: UTC
+
+      job_clusters:
+        - job_cluster_key: ingestion_cluster
+          new_cluster:
+            existing_cluster_id: ${var.cluster_id}
+
+      parameters:
+        - name: catalog_name
+          default: ${var.catalog_name}
+        - name: schema_name
+          default: ${var.schema_name}
+        - name: period_days
+          default: ${var.period_days}
+
+      tasks:
+        - task_key: ingest_actual
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=ACTUAL
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_forecast
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=FORECAST
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_remit
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=REMIT
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_normal
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=NORMAL
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_ohlc
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=OHLC
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_capacity
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=CAPACITY
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_synthetic
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=SYNTHETIC
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_backcast
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=BACKCAST
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_forex
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=FOREX
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_climate
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=CLIMATE
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+        - task_key: ingest_scenario
+          existing_cluster_id: ${var.cluster_id}
+          python_wheel_task:
+            package_name: monteleq
+            entry_point: monteleq.pipeline:ingest_data_type
+            parameters:
+              - --data-type=SCENARIO
+              - --catalog-name={{job.parameters.catalog_name}}
+              - --schema-name={{job.parameters.schema_name}}
+              - --period-days={{job.parameters.period_days}}
+          libraries:
+            - whl: ./dist/*.whl
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      catalog_name: trading_tgp_dev
+      cluster_id: 0522-063219-lfvirtho
+
+  prod:
+    mode: production
+    variables:
+      catalog_name: trading_tgp_prd
+      cluster_id: 0522-063219-lfvirtho
+    run_as:
+      service_principal_name: monteleq-service-principal

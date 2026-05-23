@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import os
-from dataclasses import dataclass, field
 from typing import Optional
 
 from energyquantified import EnergyQuantified
@@ -71,7 +69,7 @@ class BaseClient(HTTPSession):
             try:
                 self.x_api_key = self.databricks.secrets["monteleq"]["api_key"].svalue()
                 self.mode = "databricks+api"
-            except Exception as exc:
+            except Exception:
                 self.mode = "databricks"
 
     def __getstate__(self):
