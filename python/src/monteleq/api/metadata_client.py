@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 __all__ = ["MetadataClient"]
 
+_CurvePredicate = type(lambda c: True)
+
 
 class MetadataClient:
     """
@@ -171,17 +173,12 @@ class MetadataClient:
         cm = self.curvemap
 
         # ---- 1) NAME PREFILTER ------------------------------------------------
-        # Run name first when present: it's the most selective filter and the
-        # only one that can shrink the candidate set below O(N) via dict lookup.
         if name is not None:
             if isinstance(name, str):
                 patterns = (name,)
             else:
                 patterns = tuple(name)
 
-            # Single-pattern, exact key, no wildcards: O(1) short-circuit.
-            # Matches the original `if name and isinstance(name, str)` branch
-            # which returned [found] without applying other filters.
             if (
                 isinstance(name, str)
                 and "*" not in name
@@ -190,15 +187,16 @@ class MetadataClient:
             ):
                 return [cm[name]]
 
-            # Build candidate index list via vectorized substring/glob match.
             keys, lc_values = self._name_index()
             selected_idx = _name_match_indices(patterns, lc_values)
-            result = [cm[keys[i]] for i in selected_idx]
+            candidates = [cm[keys[i]] for i in selected_idx]
         else:
-            result = list(cm.values())
+            candidates = list(cm.values())
 
-        # ---- 2) NORMALIZE FILTER ARGS ONCE ------------------------------------
-        # Pre-convert enum-string filters to sets for O(1) membership.
+        # ---- 2) BUILD PREDICATE LIST -----------------------------------------
+        # Collect all active filters, then apply in a single pass over
+        # candidates instead of N sequential list comprehensions.
+        predicates: list[_CurvePredicate] = []
 
         if curve_type is not None:
             if isinstance(curve_type, (str, CurveType)):
@@ -206,7 +204,7 @@ class MetadataClient:
             ct_set = frozenset(
                 ct if isinstance(ct, CurveType) else CurveType[ct] for ct in curve_type
             )
-            result = [c for c in result if c.curve_type in ct_set]
+            predicates.append(lambda c, s=ct_set: c.curve_type in s)
 
         if data_type is not None:
             if isinstance(data_type, (str, DataType)):
@@ -214,77 +212,77 @@ class MetadataClient:
             dt_set = frozenset(
                 dt_ if isinstance(dt_, DataType) else DataType[dt_] for dt_ in data_type
             )
-            result = [c for c in result if c.data_type in dt_set]
+            predicates.append(lambda c, s=dt_set: c.data_type in s)
 
         if area is not None:
-            area_set = frozenset((area,) if isinstance(area, str) else area)
-            result = [c for c in result if c.area in area_set]
+            s = frozenset((area,) if isinstance(area, str) else area)
+            predicates.append(lambda c, s=s: c.area in s)
 
         if area_sink is not None:
-            asink_set = frozenset((area_sink,) if isinstance(area_sink, str) else area_sink)
-            result = [c for c in result if c.area_sink in asink_set]
+            s = frozenset((area_sink,) if isinstance(area_sink, str) else area_sink)
+            predicates.append(lambda c, s=s: c.area_sink in s)
 
         if commodity is not None:
-            com_set = frozenset((commodity,) if isinstance(commodity, str) else commodity)
-            result = [c for c in result if c.commodity in com_set]
+            s = frozenset((commodity,) if isinstance(commodity, str) else commodity)
+            predicates.append(lambda c, s=s: c.commodity in s)
 
         if source is not None:
-            src_set = frozenset((source,) if isinstance(source, str) else source)
-            result = [c for c in result if c.source in src_set]
+            s = frozenset((source,) if isinstance(source, str) else source)
+            predicates.append(lambda c, s=s: c.source in s)
 
         if categories is not None:
-            cats = frozenset((categories,) if isinstance(categories, str) else categories)
-            # issubset against the curve's categories — wrap once per curve.
-            result = [c for c in result if cats.issubset(c.categories)]
+            s = frozenset((categories,) if isinstance(categories, str) else categories)
+            predicates.append(lambda c, s=s: s.issubset(c.categories))
 
         if frequency is not None:
-            freq_set = frozenset((frequency,) if isinstance(frequency, str) else frequency)
-            result = [c for c in result if (c.resolution.frequency or "") in freq_set]
+            s = frozenset((frequency,) if isinstance(frequency, str) else frequency)
+            predicates.append(lambda c, s=s: (c.resolution.frequency or "") in s)
 
         if timezone is not None:
-            tz_set = frozenset((timezone,) if isinstance(timezone, str) else timezone)
-            result = [c for c in result if (c.resolution.timezone or "") in tz_set]
+            s = frozenset((timezone,) if isinstance(timezone, str) else timezone)
+            predicates.append(lambda c, s=s: (c.resolution.timezone or "") in s)
 
         if unit is not None:
-            unit_set = frozenset((unit,) if isinstance(unit, str) else unit)
-            result = [c for c in result if c.unit in unit_set]
+            s = frozenset((unit,) if isinstance(unit, str) else unit)
+            predicates.append(lambda c, s=s: c.unit in s)
 
         if denominator is not None:
-            den_set = frozenset((denominator,) if isinstance(denominator, str) else denominator)
-            result = [c for c in result if c.denominator in den_set]
+            s = frozenset((denominator,) if isinstance(denominator, str) else denominator)
+            predicates.append(lambda c, s=s: c.denominator in s)
 
         if instance_issued_timezone is not None:
-            itz_set = frozenset(
+            s = frozenset(
                 (instance_issued_timezone,)
                 if isinstance(instance_issued_timezone, str)
                 else instance_issued_timezone
             )
-            result = [c for c in result if c.instance_issued_timezone in itz_set]
+            predicates.append(lambda c, s=s: c.instance_issued_timezone in s)
 
         if place_key is not None:
-            pk_set = frozenset((place_key,) if isinstance(place_key, str) else place_key)
-            result = [c for c in result if c.place.key in pk_set]
+            s = frozenset((place_key,) if isinstance(place_key, str) else place_key)
+            predicates.append(lambda c, s=s: c.place.key in s)
 
         if place_area is not None:
-            pa_set = frozenset((place_area,) if isinstance(place_area, str) else place_area)
-            result = [
-                c for c in result
-                if c.place.area in pa_set or not pa_set.isdisjoint(c.place.areas)
-            ]
+            s = frozenset((place_area,) if isinstance(place_area, str) else place_area)
+            predicates.append(lambda c, s=s: c.place.area in s or not s.isdisjoint(c.place.areas))
 
         if place_fuel is not None:
-            fuel_set = frozenset((place_fuel,) if isinstance(place_fuel, str) else place_fuel)
-            result = [c for c in result if not fuel_set.isdisjoint(c.place.fuels)]
+            s = frozenset((place_fuel,) if isinstance(place_fuel, str) else place_fuel)
+            predicates.append(lambda c, s=s: not s.isdisjoint(c.place.fuels))
 
         if access_by is not None:
-            by_set = frozenset((access_by,) if isinstance(access_by, str) else access_by)
-            result = [c for c in result if c.access.by in by_set]
+            s = frozenset((access_by,) if isinstance(access_by, str) else access_by)
+            predicates.append(lambda c, s=s: c.access.by in s)
 
         if access_package is not None:
-            pkg_set = frozenset((access_package,) if isinstance(access_package, str) else access_package)
-            result = [c for c in result if c.access.package in pkg_set]
+            s = frozenset((access_package,) if isinstance(access_package, str) else access_package)
+            predicates.append(lambda c, s=s: c.access.package in s)
 
-        return result
+        # ---- 3) SINGLE-PASS FILTER -------------------------------------------
+        if not predicates:
+            return candidates
+
+        return [c for c in candidates if all(p(c) for p in predicates)]
 
     # ------------------------------------------------------------------
     # Internal lookup
@@ -335,36 +333,32 @@ def _compile_name_patterns_cached(patterns: tuple[str, ...]) -> re.Pattern[str]:
     return _compile_name_patterns(patterns)
 
 
-def _build_polars_pattern(patterns: tuple[str, ...]) -> str:
-    """Build a combined regex string compatible with polars' Rust regex engine.
+def _glob_to_rust_regex(glob: str) -> str:
+    """Convert a shell glob pattern to a Rust-compatible regex.
 
-    Differs from ``_compile_name_patterns`` in two ways the Rust ``regex``
-    crate cares about:
-      - ``\\Z`` (Python re) → ``$`` with multi-line off (default), i.e.
-        end-of-string. The crate uses ``\\z`` lowercase; we use ``$`` because
-        it's universally supported.
-      - We do not need the ``(?s:...)`` dotall group ``fnmatch.translate``
-        emits, because our glob translations don't use ``.`` to match
-        newlines in curve names (names don't contain newlines). We strip
-        the wrapper to keep the regex simple and portable.
+    ``fnmatch.translate`` emits Python-specific constructs (``(?s:...)``,
+    ``(?>...)``, ``\\Z``) that the Rust ``regex`` crate rejects.  Instead
+    of stripping them we translate the glob directly: ``*`` → ``.*``,
+    ``?`` → ``.``, everything else escaped.
     """
+    parts: list[str] = []
+    for ch in glob:
+        if ch == "*":
+            parts.append(".*")
+        elif ch == "?":
+            parts.append(".")
+        else:
+            parts.append(re.escape(ch))
+    return "^" + "".join(parts) + "$"
+
+
+def _build_polars_pattern(patterns: tuple[str, ...]) -> str:
+    """Build a combined regex string compatible with polars' Rust regex engine."""
     parts: list[str] = []
     for p in patterns:
         if "*" in p or "?" in p:
-            # fnmatch.translate output across CPython versions:
-            #   3.8:  "(?s:...)\\Z"
-            #   3.12: "(?s:...)\\Z"
-            # We unwrap the (?s:...) group and replace \Z with $ for the
-            # Rust regex crate. Dotall is irrelevant for names.
-            t = translate(p)
-            # Strip leading (?s: and trailing )\Z if present.
-            if t.startswith("(?s:") and t.endswith(r")\Z"):
-                t = t[4:-3]
-            elif t.endswith(r"\Z"):
-                t = t[:-2]
-            parts.append(f"^{t}$")
+            parts.append(_glob_to_rust_regex(p))
         else:
-            # Substring contains, anchored nowhere.
             parts.append(re.escape(p))
     return "|".join(f"(?:{part})" for part in parts)
 
