@@ -17,7 +17,7 @@ workspace:
 artifacts:
   monteleq_wheel:
     type: whl
-    path: ./python
+    path: ../python
 
 resources:
   jobs:
@@ -48,7 +48,7 @@ resources:
             base_parameters:
               catalog_name: "{{job.parameters.catalog_name}}"
           libraries:
-            - whl: ./dist/*.whl
+            - whl: ../dist/*.whl
 
         - task_key: ingest_by_category
           depends_on:
@@ -65,7 +65,7 @@ resources:
                   catalog_name: "{{job.parameters.catalog_name}}"
                   period_days: "{{job.parameters.period_days}}"
               libraries:
-                - whl: ./dist/*.whl
+                - whl: ../dist/*.whl
 
 targets:
   dev:
