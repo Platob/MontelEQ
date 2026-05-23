@@ -17,60 +17,67 @@ GAS_DAY_BASE_TZ = "Europe/Paris"
 GAS_DAY_HOUR_OFFSET = 6
 
 
-def iso_duration_to_seconds_expr(col: str) -> pl.Expr:
-    pattern = (
-        r"P"
-        r"(?:(\d+)Y)?"
-        r"(?:(\d+)M)?"
-        r"(?:(\d+)W)?"
-        r"(?:(\d+)D)?"
-        r"(?:T"
-        r"(?:(\d+)H)?"
-        r"(?:(\d+)M)?"
-        r"(?:(\d+)S)?"
-        r")?"
-    )
+_COMMON_DURATIONS: dict[str | None, int] = {
+    None: 0, "": 0, "NONE": 0,
+    "PT1S": 1, "PT5S": 5, "PT10S": 10, "PT15S": 15, "PT30S": 30,
+    "PT1M": 60, "PT5M": 300, "PT10M": 600, "PT15M": 900, "PT30M": 1800,
+    "PT1H": 3600, "PT2H": 7200, "PT3H": 10800, "PT4H": 14400,
+    "PT6H": 21600, "PT12H": 43200,
+    "P1D": 86400, "P1W": 7 * 86400,
+    "P1M": 30 * 86400, "P3M": 90 * 86400, "P6M": 180 * 86400,
+    "P1Y": 365 * 86400,
+    "P1DT2H30M": 86400 + 7200 + 1800,
+}
 
-    def part(group: int) -> pl.Expr:
-        return (
-            pl.col(col)
-            .str.extract(pattern, group)
-            .cast(pl.Int64, strict=False)
-            .fill_null(0)
+
+def _iso_batch_lookup(s: pl.Series) -> pl.Series:
+    lut = _COMMON_DURATIONS
+    values = s.to_list()
+    result = []
+    need_regex = False
+    for v in values:
+        if v is None:
+            result.append(0)
+            continue
+        key = v.strip().upper()
+        cached = lut.get(key)
+        if cached is not None:
+            result.append(cached)
+        elif key.startswith("P"):
+            need_regex = True
+            result.append(None)
+        else:
+            result.append(0)
+
+    if need_regex:
+        import re
+        _pat = re.compile(
+            r"P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?"
+            r"(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?"
         )
+        for i, v in enumerate(result):
+            if v is not None:
+                continue
+            m = _pat.match(values[i].strip().upper())
+            if m:
+                g = [int(x) if x else 0 for x in m.groups()]
+                secs = (
+                    g[0] * 365 * 24 * 3600 + g[1] * 30 * 24 * 3600
+                    + g[2] * 7 * 24 * 3600 + g[3] * 24 * 3600
+                    + g[4] * 3600 + g[5] * 60 + g[6]
+                )
+                lut[values[i].strip().upper()] = secs
+                result[i] = secs
+            else:
+                result[i] = 0
+    return pl.Series(s.name, result, dtype=pl.Int64)
 
-    normalized = (
+
+def iso_duration_to_seconds_expr(col: str) -> pl.Expr:
+    return (
         pl.col(col)
         .cast(pl.Utf8, strict=False)
-        .str.to_uppercase()
-        .str.strip_chars()
-    )
-
-    years = part(1)
-    months = part(2)
-    weeks = part(3)
-    days = part(4)
-    hours = part(5)
-    minutes = part(6)
-    seconds = part(7)
-
-    iso_seconds = (
-        years * 365 * 24 * 3600
-        + months * 30 * 24 * 3600
-        + weeks * 7 * 24 * 3600
-        + days * 24 * 3600
-        + hours * 3600
-        + minutes * 60
-        + seconds
-    ).cast(pl.Int64)
-
-    return (
-        pl.when(normalized.is_null() | (normalized == "") | (normalized == "NONE"))
-        .then(pl.lit(0, dtype=pl.Int64))
-        .when(normalized.str.starts_with("P"))
-        .then(iso_seconds)
-        .otherwise(pl.lit(0, dtype=pl.Int64))
-        .cast(pl.Int64)
+        .map_batches(_iso_batch_lookup, return_dtype=pl.Int64)
     )
 
 
@@ -546,104 +553,118 @@ def make_data(df: pl.DataFrame) -> pl.DataFrame:
     return result.drop(drop_cols, strict=False)
 
 
+def _null_expr(dtype: pl.DataType) -> pl.Expr:
+    return pl.lit(None, dtype=dtype)
+
+
+def _struct_fields(dtype: pl.Struct) -> dict[str, pl.DataType]:
+    fields = dtype.fields
+    if isinstance(fields, dict):
+        return fields
+
+    result: dict[str, pl.DataType] = {}
+    for field in fields:
+        if hasattr(field, "name") and hasattr(field, "dtype"):
+            result[field.name] = field.dtype
+        else:
+            result[field[0]] = field[1]
+    return result
+
+
+_reorder_expr_cache: dict[tuple, list[pl.Expr]] = {}
+
+
 def reorder_columns(
     df: pl.DataFrame,
     *,
     schema: pl.Schema,
 ) -> pl.DataFrame:
-    def _null(dtype: pl.DataType) -> pl.Expr:
-        return pl.lit(None, dtype=dtype)
+    actual_columns = frozenset(df.columns)
+    actual_struct_sig = tuple(
+        (col, tuple(sorted(_struct_fields(df.schema[col]).keys())))
+        for col in df.columns
+        if col in df.schema and isinstance(df.schema[col], (pl.Struct, pl.List))
+    )
+    cache_key = (id(schema), actual_columns, actual_struct_sig)
 
-    def _schema_items(schema_: pl.Schema) -> list[tuple[str, pl.DataType]]:
-        return [(name, schema_[name]) for name in schema_.names()]
+    cached = _reorder_expr_cache.get(cache_key)
+    if cached is not None:
+        return df.select(cached).filter(pl.col("curve_name").is_not_null())
 
-    def _struct_fields(dtype: pl.Struct) -> dict[str, pl.DataType]:
-        fields = dtype.fields
-        if isinstance(fields, dict):
-            return fields
-
-        result: dict[str, pl.DataType] = {}
-        for field in fields:
-            if hasattr(field, "name") and hasattr(field, "dtype"):
-                result[field.name] = field.dtype
-            else:
-                result[field[0]] = field[1]
-        return result
-
-    def _struct_expr(col: str, target_dtype: pl.Struct) -> pl.Expr:
-        target_fields = _struct_fields(target_dtype)
-
-        if col not in df.columns or not isinstance(df.schema[col], pl.Struct):
-            return _null(target_dtype).alias(col)
-
-        current_fields = _struct_fields(df.schema[col])
-
-        return pl.struct(
-            [
-                (
-                    pl.col(col).struct.field(name).cast(dtype, strict=False)
-                    if name in current_fields
-                    else _null(dtype)
-                ).alias(name)
-                for name, dtype in target_fields.items()
-            ]
-        ).alias(col)
-
-    def _list_struct_expr(col: str, target_dtype: pl.List) -> pl.Expr:
-        target_inner = target_dtype.inner
-        if not isinstance(target_inner, pl.Struct):
-            return pl.col(col).cast(target_dtype, strict=False).alias(col)
-
-        if col not in df.columns or not isinstance(df.schema[col], pl.List):
-            return _null(target_dtype).alias(col)
-
-        current_inner = df.schema[col].inner
-        if not isinstance(current_inner, pl.Struct):
-            return _null(target_dtype).alias(col)
-
-        target_fields = _struct_fields(target_inner)
-        current_fields = _struct_fields(current_inner)
-
-        return (
-            pl.when(pl.col(col).is_null())
-            .then(_null(target_dtype))
-            .otherwise(
-                pl.col(col).list.eval(
-                    pl.struct(
-                        [
-                            (
-                                pl.element().struct.field(name).cast(dtype, strict=False)
-                                if name in current_fields
-                                else _null(dtype)
-                            ).alias(name)
-                            for name, dtype in target_fields.items()
-                        ]
-                    )
-                ).cast(target_dtype, strict=False)
-            )
-            .alias(col)
-        )
-
-    expected_columns = set(schema.names())
-    actual_columns = set(df.columns)
-    new_columns = sorted(actual_columns - expected_columns)
-
+    new_columns = sorted(actual_columns - set(schema.names()))
     if new_columns:
         print(f"New columns detected: {new_columns}")
 
     exprs: list[pl.Expr] = []
-
-    for col, dtype in _schema_items(schema):
+    for col in schema.names():
+        dtype = schema[col]
         if isinstance(dtype, pl.Struct):
-            exprs.append(_struct_expr(col, dtype))
+            exprs.append(_build_struct_expr(col, dtype, df))
         elif isinstance(dtype, pl.List) and isinstance(dtype.inner, pl.Struct):
-            exprs.append(_list_struct_expr(col, dtype))
-        elif col in df.columns:
+            exprs.append(_build_list_struct_expr(col, dtype, df))
+        elif col in actual_columns:
             exprs.append(pl.col(col).cast(dtype, strict=False).alias(col))
         else:
-            exprs.append(_null(dtype).alias(col))
+            exprs.append(_null_expr(dtype).alias(col))
 
+    _reorder_expr_cache[cache_key] = exprs
     return df.select(exprs).filter(pl.col("curve_name").is_not_null())
+
+
+def _build_struct_expr(col: str, target_dtype: pl.Struct, df: pl.DataFrame) -> pl.Expr:
+    target_fields = _struct_fields(target_dtype)
+
+    if col not in df.columns or not isinstance(df.schema[col], pl.Struct):
+        return _null_expr(target_dtype).alias(col)
+
+    current_fields = _struct_fields(df.schema[col])
+
+    return pl.struct(
+        [
+            (
+                pl.col(col).struct.field(name).cast(dtype, strict=False)
+                if name in current_fields
+                else _null_expr(dtype)
+            ).alias(name)
+            for name, dtype in target_fields.items()
+        ]
+    ).alias(col)
+
+
+def _build_list_struct_expr(col: str, target_dtype: pl.List, df: pl.DataFrame) -> pl.Expr:
+    target_inner = target_dtype.inner
+    if not isinstance(target_inner, pl.Struct):
+        return pl.col(col).cast(target_dtype, strict=False).alias(col)
+
+    if col not in df.columns or not isinstance(df.schema[col], pl.List):
+        return _null_expr(target_dtype).alias(col)
+
+    current_inner = df.schema[col].inner
+    if not isinstance(current_inner, pl.Struct):
+        return _null_expr(target_dtype).alias(col)
+
+    target_fields = _struct_fields(target_inner)
+    current_fields = _struct_fields(current_inner)
+
+    return (
+        pl.when(pl.col(col).is_null())
+        .then(_null_expr(target_dtype))
+        .otherwise(
+            pl.col(col).list.eval(
+                pl.struct(
+                    [
+                        (
+                            pl.element().struct.field(name).cast(dtype, strict=False)
+                            if name in current_fields
+                            else _null_expr(dtype)
+                        ).alias(name)
+                        for name, dtype in target_fields.items()
+                    ]
+                )
+            ).cast(target_dtype, strict=False)
+        )
+        .alias(col)
+    )
 
 
 def _ohlc_period_end_expr(

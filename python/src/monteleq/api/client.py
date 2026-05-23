@@ -325,11 +325,12 @@ class APIClient(BaseClient):
             _["curve_name"]
             for _ in curated.select("curve_name").distinct().collect()
         ]
+        cm = self.metadata.curvemap
         groups: dict[str, list[str]] = {}
         for n in curve_names:
-            matches = self.metadata.curves(name=n)
-            if matches:
-                tb = matches[0].table_name(prefix="curated_")
+            c = cm.get(n)
+            if c is not None:
+                tb = c.table_name(prefix="curated_")
                 groups.setdefault(tb, []).append(n)
 
         for tb, names in groups.items():
@@ -339,7 +340,9 @@ class APIClient(BaseClient):
             if sub.limit(1).count() == 0:
                 continue
             try:
-                curves = self.metadata.curves(name=names)
+                curves = [cm[n] for n in names if n in cm]
+                if not curves:
+                    continue
                 curve_ids = {c.id for c in curves}
                 self.curation.table(curves[0]).insert(
                     sub,
@@ -369,25 +372,30 @@ class APIClient(BaseClient):
         else:
             responses = batch.new_responses()
 
-        curated: polars.DataFrame | None = None
+        curated_parts: list[polars.DataFrame] = []
         for response in responses:
             if not response.ok:
                 continue
             df = self.curation.curate(response)
             if df.height == 0:
                 continue
-            curated = df if curated is None else polars.concat(
-                [curated, df], how="diagonal_relaxed",
-            )
+            curated_parts.append(df)
 
-        if curated is None:
+        if not curated_parts:
             return
 
+        curated = (
+            curated_parts[0]
+            if len(curated_parts) == 1
+            else polars.concat(curated_parts, how="diagonal_relaxed")
+        )
+
+        cm = self.metadata.curvemap
         groups: dict[str, list[str]] = {}
         for n in curated["curve_name"].unique().to_list():
-            matches = self.metadata.curves(name=n)
-            if matches:
-                tb = matches[0].table_name(prefix="curated_")
+            c = cm.get(n)
+            if c is not None:
+                tb = c.table_name(prefix="curated_")
                 groups.setdefault(tb, []).append(n)
 
         for tb, names in groups.items():
@@ -395,7 +403,9 @@ class APIClient(BaseClient):
             if sub.height == 0:
                 continue
             try:
-                curves = self.metadata.curves(name=names)
+                curves = [cm[n] for n in names if n in cm]
+                if not curves:
+                    continue
                 self.curation.table(curves[0]).insert(
                     sub,
                     mode=Mode.APPEND,
