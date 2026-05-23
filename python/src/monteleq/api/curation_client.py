@@ -177,34 +177,10 @@ class CurationClient:
         *,
         begin: Optional[dt.datetime | dt.date | str] = None,
         end: Optional[dt.datetime | dt.date | str] = None,
-        **media_options,
     ) -> pl.DataFrame:
-        """
-        Transform a raw API response (or DataFrame) into the curated schema.
-
-        Parameters
-        ----------
-        response :
-            Raw HTTP response, or a pre-parsed DataFrame / LazyFrame.
-        begin / end :
-            Optional UTC-aware datetime boundaries to **filter** the curated
-            data rows. Only data whose ``from_timestamp`` falls within
-            ``[begin, end)`` is kept. Accepts ``datetime``, ``date``, or
-            an ISO-format string. When ``None`` the corresponding bound
-            is unbounded.
-
-        Steps:
-        1. Parse HTTP response → Polars DataFrame when needed.
-        2. Unnest ``resolution``, ``unit``, ``instance``, ``curve``,
-           ``curve_access``, and ``curve_resolution`` struct columns.
-        3. Handle scenario timeseries (zip ``scenario_names`` × ``data_s``).
-        4. Normalise data rows via ``make_data``.
-        5. **Filter** rows by ``[begin, end)`` on ``data.from_timestamp``
-           when either bound is supplied.
-        6. Group by logical series identity and aggregate ``data`` into lists.
-        """
+        """Transform a raw API response (or DataFrame) into the curated schema."""
         if isinstance(response, HTTPResponse):
-            response = response.to_polars(parse=True, **media_options)
+            response = response.to_polars(parse=True)
 
         if isinstance(response, pl.LazyFrame):
             response = response.collect()

@@ -12,26 +12,20 @@ from yggdrasil.data.enums import Mode
 from yggdrasil.databricks import DatabricksClient
 from yggdrasil.databricks.table import Table
 from yggdrasil.environ import PyEnv
-from yggdrasil.io import URL
 from yggdrasil.http_ import HTTPSession
+from yggdrasil.http_.session import Authorization, WaitingConfig
+from yggdrasil.io import URL
 from yggdrasil.io.send_config import CacheConfig
 
 from monteleq.model import Curve
 
 __all__ = ["BaseClient"]
 
+Headers = dict[str, str] | None
+
 
 class BaseClient(HTTPSession):
-    """
-    Low-level HTTP session wired to Databricks / EnergyQuantified auth.
-
-    Holds shared infrastructure for all sub-clients:
-    - auth/bootstrap
-    - Databricks, EQ client, and SQL accessors
-    - cache normalization
-    - parameter normalization
-    - low-level curve request preparation
-    """
+    """Low-level HTTP session wired to Databricks / EnergyQuantified auth."""
 
     def __init__(
         self,
@@ -41,11 +35,23 @@ class BaseClient(HTTPSession):
         schema_name: str | None = "src_monteleq",
         mode: str | None = None,
         databricks: Optional[DatabricksClient] = None,
-        **kwargs: Optional[dict]
-    ):
+        verify: bool = True,
+        pool_maxsize: int = 10,
+        headers: Headers = None,
+        waiting: WaitingConfig | None = None,
+        auth: Authorization | None = None,
+    ) -> None:
+        kw: dict = {}
+        if waiting is not None:
+            kw["waiting"] = waiting
+        if auth is not None:
+            kw["auth"] = auth
         super().__init__(
             base_url=base_url or URL.from_str("https://app.energyquantified.com/api/"),
-            **kwargs
+            verify=verify,
+            pool_maxsize=pool_maxsize,
+            headers=headers,
+            **kw,
         )
         self.catalog_name = catalog_name or "trading_tgp_dev"
         self.schema_name = schema_name or "src_monteleq"

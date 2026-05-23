@@ -3,24 +3,6 @@ monteleq.api.client
 ===================
 
 Main entry-point for the MontelEQ / EnergyQuantified API.
-
-``APIClient`` extends ``BaseClient`` (which handles raw HTTP + auth) and wires
-together a set of focused sub-clients, plus exposes high-level fetch/curate
-methods for all curve types directly on itself:
-
-.. code-block:: python
-
-    client = APIClient()
-
-    # Metadata
-    client.metadata.curves(curve_type="TIMESERIES")
-
-    # High-level curate (yields curated DataFrames)
-    for df in client.curate_curves("Hydro NO Total >", begin="2024-01-01"):
-        print(df.shape)
-
-    # Spark-distributed ingestion (new_hits only)
-    client.ingest_spark(curves, spark_session=spark, begin=start, end=end)
 """
 from __future__ import annotations
 
@@ -53,13 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 class APIClient(BaseClient):
-    """
-    Authenticated client for the MontelEQ / EnergyQuantified API.
-
-    Inherits all HTTP + auth infrastructure from ``BaseClient``, exposes
-    focused sub-clients as attributes, and provides high-level curate methods
-    for all curve types directly.
-    """
+    """Authenticated client for the MontelEQ / EnergyQuantified API."""
 
     def __init__(
         self,
@@ -68,34 +44,51 @@ class APIClient(BaseClient):
         catalog_name: str | None = None,
         schema_name: str | None = None,
         mode: str | None = None,
-        **kwargs: Any,
+        verify: bool = True,
+        pool_maxsize: int = 10,
     ) -> None:
         super().__init__(
             base_url,
-            catalog_name=catalog_name, schema_name=schema_name,
-            mode=mode, **kwargs
+            catalog_name=catalog_name,
+            schema_name=schema_name,
+            mode=mode,
+            verify=verify,
+            pool_maxsize=pool_maxsize,
         )
         self.metadata = MetadataClient(self)
         self.events = EventsClient(self)
         self.curation = CurationClient(self)
 
     # ------------------------------------------------------------------
-    # Single-curve fetch (raw HTTPResponse generator)
+    # Instance listing
     # ------------------------------------------------------------------
 
     def list_instances(
         self,
         requests: CurveRequest | Curve | str | Iterable[CurveRequest],
-        **options: Any,
+        *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
+        raise_error: bool = True,
     ) -> Iterator[Instance]:
         now = dt.datetime.now(tz=dt.timezone.utc)
 
-        for request in CurveRequest.iterate(requests, client=self, **options):
-            issued_at_latest = (
+        for request in CurveRequest.iterate(
+            requests,
+            client=self,
+            begin=begin,
+            end=end,
+            issued_at_earliest=issued_at_earliest,
+            issued_at_latest=issued_at_latest,
+            raise_error=raise_error,
+        ):
+            ial = (
                 any_to_datetime(request.issued_at_latest, tz=dt.timezone.utc)
                 if request.issued_at_latest else now
             )
-            issued_at_earliest = (
+            iae = (
                 any_to_datetime(request.issued_at_earliest, tz=dt.timezone.utc)
                 if request.issued_at_earliest else None
             )
@@ -112,15 +105,15 @@ class APIClient(BaseClient):
 
             logger.debug(
                 "list_instances: curve=%s endpoint=%s latest=%s earliest=%s tags=%s",
-                curve.name, endpoint, issued_at_latest, issued_at_earliest, request.request_tags,
+                curve.name, endpoint, ial, iae, request.request_tags,
             )
 
             cursor = truncate_datetime(
-                issued_at_latest, interval=DEFAULT_ISSUE_INTERVAL, add_interval=True,
+                ial, interval=DEFAULT_ISSUE_INTERVAL, add_interval=True,
             )
             floor_earliest = (
-                truncate_datetime(issued_at_earliest, interval=DEFAULT_ISSUE_INTERVAL)
-                if issued_at_earliest is not None else None
+                truncate_datetime(iae, interval=DEFAULT_ISSUE_INTERVAL)
+                if iae is not None else None
             )
 
             seen: set[tuple[dt.datetime, str | None]] = set()
@@ -160,9 +153,9 @@ class APIClient(BaseClient):
                     if oldest_in_batch is None or instance.issued_at < oldest_in_batch:
                         oldest_in_batch = instance.issued_at
 
-                    if issued_at_earliest is not None and instance.issued_at < issued_at_earliest:
+                    if iae is not None and instance.issued_at < iae:
                         continue
-                    if instance.issued_at > issued_at_latest:
+                    if instance.issued_at > ial:
                         continue
 
                     key = (instance.issued_at, instance.tag)
@@ -185,17 +178,29 @@ class APIClient(BaseClient):
                     next_cursor = cursor - DEFAULT_ISSUE_INTERVAL
                 cursor = next_cursor
 
+    # ------------------------------------------------------------------
+    # Fetch raw HTTP responses
+    # ------------------------------------------------------------------
+
     def fetch_curves(
         self,
         requests: CurveRequestsArg,
         *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
-        **options: Any,
     ) -> Iterator[Any]:
         yield from self.send_many_batches(
             CurveRequest.http_requests(
-                requests, client=self,
-                **options
+                requests,
+                client=self,
+                begin=begin,
+                end=end,
+                issued_at_earliest=issued_at_earliest,
+                issued_at_latest=issued_at_latest,
+                raise_error=raise_error,
             ),
             raise_error=raise_error,
         )
@@ -208,15 +213,21 @@ class APIClient(BaseClient):
         self,
         requests: CurveRequestsArg,
         *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
         insert_all: bool = False,
         return_data: bool = False,
-        **options: Any,
     ) -> Iterator[Any]:
         for batch in self.fetch_curves(
             requests,
+            begin=begin,
+            end=end,
+            issued_at_earliest=issued_at_earliest,
+            issued_at_latest=issued_at_latest,
             raise_error=raise_error,
-            **options
         ):
             if PyEnv.in_databricks():
                 if insert_all:
@@ -308,30 +319,23 @@ class APIClient(BaseClient):
         raise_error: bool = False,
         batch_size: int | None = None,
         insert_all: bool = False,
-    ) -> dict[str, int]:
-        """Distributed fetch → curate → insert pipeline using Spark.
-
-        Leverages ``send_many_batches(spark_session=...)`` to scatter HTTP
-        calls across Spark executors via ``mapInArrow``.  Only ``new_hits``
-        (freshly fetched responses not already in cache) are curated and
-        inserted into the target ``curated_*`` Delta tables.
-        """
+    ) -> dict[str, int | float]:
+        """Distributed fetch → curate → insert pipeline using Spark."""
         t0 = time.perf_counter()
-        stats: dict[str, int] = {"fetched": 0, "curated": 0, "tables": 0}
+        stats: dict[str, int | float] = {"fetched": 0, "curated": 0, "tables": 0}
 
         prepared = CurveRequest.http_requests(
-            requests, client=self,
+            requests,
+            client=self,
             raise_error=raise_error,
         )
 
-        send_kwargs: dict[str, Any] = {
-            "raise_error": raise_error,
-            "spark_session": spark_session,
-        }
-        if batch_size is not None:
-            send_kwargs["batch_size"] = batch_size
-
-        for batch in self.send_many_batches(prepared, **send_kwargs):
+        for batch in self.send_many_batches(
+            prepared,
+            raise_error=raise_error,
+            spark_session=spark_session,
+            batch_size=batch_size,
+        ):
             stats["fetched"] += 1
 
             if insert_all:
@@ -397,13 +401,7 @@ class APIClient(BaseClient):
         *,
         barrier: bool = False,
     ) -> "SparkDataFrame":
-        """Curate a Spark DataFrame whose rows match ``RESPONSE_SCHEMA``.
-
-        Each partition is reconstructed into ``Response`` objects via
-        ``Response.from_arrow_tabular``, fed through
-        ``CurationClient.curate``, and emitted as Arrow batches
-        matching ``curated_schema``.
-        """
+        """Curate a Spark DataFrame whose rows match ``RESPONSE_SCHEMA``."""
         spark_curated_schema = CURATED_DATA_SCHEMA.to_spark_schema()
 
         ser_client = self

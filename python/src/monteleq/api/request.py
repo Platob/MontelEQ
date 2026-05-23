@@ -32,6 +32,8 @@ DATETIME_WINDOW_COUNT = 24
 MAX_DATETIME_SPAN = DATETIME_SPAN * DATETIME_WINDOW_COUNT
 EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
 
+_SENTINEL = object()
+
 
 def utc_now_ceil_hour() -> dt.datetime:
     return (
@@ -86,12 +88,7 @@ def _effective_timezone(
 
 @dataclass
 class CurveRequest:
-    """Domain-level description of a curve fetch.
-
-    This is *not* a :class:`PreparedRequest` — it's the inputs needed to
-    build one. Call :meth:`to_request` to materialize an HTTP request
-    suitable for ``Session.send`` / ``send_many``.
-    """
+    """Domain-level description of a curve fetch."""
 
     curve: Curve = field(default_factory=lambda: Curve(name=""))
     begin: dt.datetime | None = None
@@ -194,12 +191,6 @@ class CurveRequest:
         return self.client.cache_configs(curve=self.curve, upsert=upsert)
 
     def to_request(self) -> PreparedRequest:
-        """Materialize this domain object as a :class:`PreparedRequest`.
-
-        Builds the URL, headers, tags, and cache configs from the
-        current domain state. Re-callable — useful after mutating
-        ``begin/end/issued_at`` etc. via :meth:`copy`.
-        """
         base_url = (
             URL.from_("https://app.energyquantified.com/api/")
             if self.client is None
@@ -224,8 +215,8 @@ class CurveRequest:
         return request
 
     @classmethod
-    def deduplicate(cls, requests: Iterable["CurveRequest"]) -> Iterator["PreparedRequest"]:
-        keys = set()
+    def deduplicate(cls, requests: Iterable["CurveRequest"]) -> Iterator[PreparedRequest]:
+        keys: set[int] = set()
         for request in requests:
             if not isinstance(request, PreparedRequest):
                 request = request.to_request()
@@ -242,47 +233,46 @@ class CurveRequest:
     def copy(
         self,
         *,
-        curve: Curve | None = ...,
-        begin: dt.datetime | None = ...,
-        end: dt.datetime | None = ...,
-        issued_at: dt.datetime | None = ...,
-        issued_at_earliest: dt.datetime | None = ...,
-        issued_at_latest: dt.datetime | None = ...,
-        request_tags: list[str] | str | None = ...,
-        limit: int | None = ...,
-        exclude_tags: list[str] | str | None = ...,
-        ensembles: bool = ...,
-        timezone: str | None = ...,
-        unit: str | None = ...,
-        frequency: str | None = ...,
-        event_type: EventType | None = ...,
-        raise_error: bool = ...,
-        tags: dict[str, str] | None = ...,
-        client: "APIClient" = ...,
-        **kwargs: Any,
+        curve: Curve | None = _SENTINEL,
+        begin: dt.datetime | None = _SENTINEL,
+        end: dt.datetime | None = _SENTINEL,
+        issued_at: dt.datetime | None = _SENTINEL,
+        issued_at_earliest: dt.datetime | None = _SENTINEL,
+        issued_at_latest: dt.datetime | None = _SENTINEL,
+        request_tags: list[str] | str | None = _SENTINEL,
+        limit: int | None = _SENTINEL,
+        exclude_tags: list[str] | str | None = _SENTINEL,
+        ensembles: bool = _SENTINEL,
+        timezone: str | None = _SENTINEL,
+        unit: str | None = _SENTINEL,
+        frequency: str | None = _SENTINEL,
+        event_type: EventType | None = _SENTINEL,
+        raise_error: bool = _SENTINEL,
+        tags: dict[str, str] | None = _SENTINEL,
+        client: "APIClient | None" = _SENTINEL,
     ) -> "CurveRequest":
         return type(self)(
-            curve=self.curve if curve is ... else curve,
-            begin=self.begin if begin is ... else begin,
-            end=self.end if end is ... else end,
-            issued_at=self.issued_at if issued_at is ... else issued_at,
+            curve=self.curve if curve is _SENTINEL else curve,
+            begin=self.begin if begin is _SENTINEL else begin,
+            end=self.end if end is _SENTINEL else end,
+            issued_at=self.issued_at if issued_at is _SENTINEL else issued_at,
             issued_at_earliest=(
-                self.issued_at_earliest if issued_at_earliest is ... else issued_at_earliest
+                self.issued_at_earliest if issued_at_earliest is _SENTINEL else issued_at_earliest
             ),
             issued_at_latest=(
-                self.issued_at_latest if issued_at_latest is ... else issued_at_latest
+                self.issued_at_latest if issued_at_latest is _SENTINEL else issued_at_latest
             ),
-            request_tags=list(self.request_tags) if request_tags is ... else request_tags,
-            limit=self.limit if limit is ... else limit,
-            exclude_tags=list(self.exclude_tags) if exclude_tags is ... else exclude_tags,
-            ensembles=self.ensembles if ensembles is ... else ensembles,
-            timezone=self.timezone if timezone is ... else timezone,
-            unit=self.unit if unit is ... else unit,
-            frequency=self.frequency if frequency is ... else frequency,
-            event_type=self.event_type if event_type is ... else event_type,
-            raise_error=self.raise_error if raise_error is ... else raise_error,
-            tags=dict(self.tags) if tags is ... else (tags or {}),
-            client=self.client if client is ... else client,
+            request_tags=list(self.request_tags) if request_tags is _SENTINEL else request_tags,
+            limit=self.limit if limit is _SENTINEL else limit,
+            exclude_tags=list(self.exclude_tags) if exclude_tags is _SENTINEL else exclude_tags,
+            ensembles=self.ensembles if ensembles is _SENTINEL else ensembles,
+            timezone=self.timezone if timezone is _SENTINEL else timezone,
+            unit=self.unit if unit is _SENTINEL else unit,
+            frequency=self.frequency if frequency is _SENTINEL else frequency,
+            event_type=self.event_type if event_type is _SENTINEL else event_type,
+            raise_error=self.raise_error if raise_error is _SENTINEL else raise_error,
+            tags=dict(self.tags) if tags is _SENTINEL else (tags or {}),
+            client=self.client if client is _SENTINEL else client,
         )
 
     # ------------------------------------------------------------------
@@ -294,9 +284,23 @@ class CurveRequest:
         cls,
         obj: Any,
         client: "APIClient",
+        *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
-        **options,
     ) -> Iterator["CurveRequest"]:
+        kw: dict[str, Any] = {}
+        if begin is not None:
+            kw["begin"] = begin
+        if end is not None:
+            kw["end"] = end
+        if issued_at_earliest is not None:
+            kw["issued_at_earliest"] = issued_at_earliest
+        if issued_at_latest is not None:
+            kw["issued_at_latest"] = issued_at_latest
+
         if isinstance(obj, cls):
             obj.client = client
             yield obj
@@ -323,16 +327,22 @@ class CurveRequest:
                         event_type=obj.event_type,
                         client=client,
                         raise_error=raise_error,
-                        **options,
+                        **kw,
                     )
         elif isinstance(obj, str):
             for curve in client.metadata.curves(name=obj):
-                yield cls(curve=curve, client=client, raise_error=raise_error, **options)
+                yield cls(curve=curve, client=client, raise_error=raise_error, **kw)
         elif isinstance(obj, Curve):
-            yield cls(curve=obj, client=client, raise_error=raise_error, **options)
+            yield cls(curve=obj, client=client, raise_error=raise_error, **kw)
         elif isinstance(obj, Iterable):
             for item in obj:
-                yield from cls.iterate(item, client=client, raise_error=raise_error, **options)
+                yield from cls.iterate(
+                    item, client=client,
+                    begin=begin, end=end,
+                    issued_at_earliest=issued_at_earliest,
+                    issued_at_latest=issued_at_latest,
+                    raise_error=raise_error,
+                )
         elif isinstance(obj, PreparedRequest):
             yield obj
         else:
@@ -375,8 +385,6 @@ class CurveRequest:
         with_tags: bool = True,
         with_limit: bool = True,
     ) -> dict[str, Any]:
-        # When the URL path already encodes issued_at (and possibly the
-        # single tag), drop the corresponding query params.
         if self.curve.is_instance and self.issued_at:
             with_issued_range = False
             with_limit = False
@@ -417,8 +425,7 @@ class CurveRequest:
         return params
 
     # ------------------------------------------------------------------
-    # http_requests fan-out — yields CurveRequest instances; callers
-    # pipe through .to_request() to get PreparedRequests for send_many.
+    # http_requests fan-out
     # ------------------------------------------------------------------
 
     @classmethod
@@ -426,14 +433,22 @@ class CurveRequest:
         cls,
         obj: Any,
         client: "APIClient",
+        *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
-        **options,
     ) -> Iterator[PreparedRequest]:
         yield from cls.deduplicate(
             cls._http_requests(
-                obj=obj, client=client,
+                obj=obj,
+                client=client,
+                begin=begin,
+                end=end,
+                issued_at_earliest=issued_at_earliest,
+                issued_at_latest=issued_at_latest,
                 raise_error=raise_error,
-                **options
             )
         )
 
@@ -442,25 +457,33 @@ class CurveRequest:
         cls,
         obj: Any,
         client: "APIClient",
+        *,
+        begin: dt.datetime | str | None = None,
+        end: dt.datetime | str | None = None,
+        issued_at_earliest: dt.datetime | str | None = None,
+        issued_at_latest: dt.datetime | str | None = None,
         raise_error: bool = True,
-        **options,
     ) -> Iterator["CurveRequest"]:
         for curve_request in cls.iterate(
-            obj=obj, client=client,
+            obj=obj,
+            client=client,
+            begin=begin,
+            end=end,
+            issued_at_earliest=issued_at_earliest,
+            issued_at_latest=issued_at_latest,
             raise_error=raise_error,
-            **options
         ):
             if isinstance(curve_request, PreparedRequest):
                 yield curve_request
                 continue
 
-            for start, end in iter_datetime_ranges(
+            for start, end_ in iter_datetime_ranges(
                 curve_request.begin,
                 curve_request.end,
                 interval=curve_request.fetch_interval,
             ):
                 refined: CurveRequest = curve_request.copy(
-                    begin=start, end=end,
+                    begin=start, end=end_,
                     client=client,
                     raise_error=raise_error,
                 )
@@ -468,8 +491,9 @@ class CurveRequest:
                 if refined.curve.is_instance or refined.curve.is_period_instance:
                     for instance in client.list_instances(
                         requests=curve_request,
+                        issued_at_earliest=issued_at_earliest,
+                        issued_at_latest=issued_at_latest,
                         raise_error=raise_error,
-                        **options
                     ):
                         if curve_request.curve.is_instance:
                             yield refined.copy(
@@ -480,7 +504,7 @@ class CurveRequest:
                                 request_tags=instance.tags,
                             )
                         else:
-                            issued_at_earliest = truncate_datetime(
+                            iae = truncate_datetime(
                                 instance.issued_at,
                                 tz=dt.timezone.utc,
                                 interval=DEFAULT_ISSUE_INTERVAL,
@@ -489,9 +513,8 @@ class CurveRequest:
                             yield refined.copy(
                                 curve=instance.curve,
                                 issued_at=None,
-                                issued_at_earliest=issued_at_earliest,
-                                issued_at_latest=issued_at_earliest
-                                + DEFAULT_ISSUE_INTERVAL,
+                                issued_at_earliest=iae,
+                                issued_at_latest=iae + DEFAULT_ISSUE_INTERVAL,
                                 request_tags=instance.tags,
                             )
                 else:
