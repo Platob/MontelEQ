@@ -5,6 +5,9 @@ import ctypes
 import datetime as dt
 from typing import Optional, TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from yggdrasil.databricks.table import Table
+
 import polars as pl
 import xxhash
 from yggdrasil.data.cast import any_to_datetime
@@ -155,7 +158,7 @@ class CurationClient:
     # Table helper
     # ------------------------------------------------------------------
 
-    def table(self, curve: Curve, prefix: str = "curated_"):
+    def table(self, curve: Curve | str, prefix: str = "curated_") -> "Table":
         """Return the Databricks Delta table for a curated curve dataset (creates if absent)."""
         if not isinstance(curve, Curve):
             curve = self._api.metadata.curves(name=curve)[0]

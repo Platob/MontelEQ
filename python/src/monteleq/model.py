@@ -97,7 +97,7 @@ class Resolution:
     frequency: str | None = None
     timezone: str | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.frequency is not None:
             cleaned = self.frequency.strip()
             if not cleaned or cleaned.lower() == "none":
@@ -231,7 +231,7 @@ class Curve:
     instance_issued_timezone: str | None = None
     place: Place = field(default_factory=Place)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.id == 0 and self.name:
             object.__setattr__(self, "id", _xxh3_id(self.name))
 
@@ -340,12 +340,12 @@ class Instance:
     tag: str | None = None
 
     @property
-    def tags(self):
+    def tags(self) -> list[str]:
         if not self.tag:
             return []
         return [self.tag]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.issued_at is not None:
             object.__setattr__(self, "issued_at", _coerce_datetime(self.issued_at))
         if self.created_at is not None:

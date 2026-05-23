@@ -12,6 +12,8 @@ from energyquantified.metadata import CurveType, DataType
 from monteleq.model import Curve
 
 if TYPE_CHECKING:
+    from yggdrasil.io.request import PreparedRequest
+    from yggdrasil.io.response import Response
     from monteleq.api._base_client import BaseClient
 
 __all__ = ["MetadataClient"]
@@ -48,7 +50,7 @@ class MetadataClient:
             return [curves]
         return curves
 
-    def request(self):
+    def request(self) -> PreparedRequest:
         return self._base.prepare_request(
             method="GET",
             url="metadata/curves/",
@@ -56,7 +58,7 @@ class MetadataClient:
             tags={"endpoint": "metadata_curves"},
         )
 
-    def fetch(self):
+    def fetch(self) -> Response:
         if self._base._databricks:
             cache = self._base.check_cache_param(cache=None, table_name="raw_metadata_curves")
         else:
@@ -100,7 +102,7 @@ class MetadataClient:
     def curve_data_types(self) -> set[tuple[CurveType, DataType]]:
         return {(c.curve_type, c.data_type) for c in self.curvemap.values()}
 
-    def volcano_curves(self):
+    def volcano_curves(self) -> list[Curve]:
         df = pl.DataFrame(self.curves(), infer_schema_length=100000)
         cat = ["Exchange Net Transfer Capacity", "Price Spot", "Consumption",
                "Hydro Pumped-storage Pumping", "Exchange Day-Ahead Schedule"]

@@ -68,8 +68,8 @@ class APIClient(BaseClient):
         catalog_name: str | None = None,
         schema_name: str | None = None,
         mode: str | None = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> None:
         super().__init__(
             base_url,
             catalog_name=catalog_name, schema_name=schema_name,
@@ -86,8 +86,8 @@ class APIClient(BaseClient):
     def list_instances(
         self,
         requests: CurveRequest | Curve | str | Iterable[CurveRequest],
-        **options
-    ):
+        **options: Any,
+    ) -> Iterator[Instance]:
         now = dt.datetime.now(tz=dt.timezone.utc)
 
         for request in CurveRequest.iterate(requests, client=self, **options):
@@ -190,8 +190,8 @@ class APIClient(BaseClient):
         requests: CurveRequestsArg,
         *,
         raise_error: bool = True,
-        **options: dict[str, Any],
-    ):
+        **options: Any,
+    ) -> Iterator[Any]:
         yield from self.send_many_batches(
             CurveRequest.http_requests(
                 requests, client=self,
@@ -211,8 +211,8 @@ class APIClient(BaseClient):
         raise_error: bool = True,
         insert_all: bool = False,
         return_data: bool = False,
-        **options: dict[str, Any],
-    ):
+        **options: Any,
+    ) -> Iterator[Any]:
         for batch in self.fetch_curves(
             requests,
             raise_error=raise_error,

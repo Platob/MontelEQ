@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from yggdrasil.databricks.sql.engine import SQLEngine
 
 from energyquantified import EnergyQuantified
 from yggdrasil.data.enums import Mode
@@ -51,7 +54,7 @@ class BaseClient(HTTPSession):
         self._eqclient = None
         self._auto_init()
 
-    def _auto_init(self):
+    def _auto_init(self) -> None:
         if PyEnv.in_databricks():
             self._databricks = DatabricksClient.current()
         elif self._databricks is None and not self.x_api_key:
@@ -72,12 +75,12 @@ class BaseClient(HTTPSession):
             except Exception:
                 self.mode = "databricks"
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict:
         state = super().__getstate__()
         state.pop("_eqclient", None)
         return state
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: dict) -> None:
         state["_eqclient"] = None
         super().__setstate__(state)
         self._auto_init()
@@ -98,7 +101,7 @@ class BaseClient(HTTPSession):
         return EnergyQuantified(api_key=self.x_api_key, ssl_verify=False)
 
     @property
-    def sql(self):
+    def sql(self) -> "SQLEngine":
         return self.databricks.sql(
             catalog_name=self.catalog_name,
             schema_name=self.schema_name,
@@ -125,8 +128,8 @@ class BaseClient(HTTPSession):
     def cache_configs(
         self,
         curve: Curve,
-        upsert: bool
-    ):
+        upsert: bool,
+    ) -> tuple[CacheConfig, CacheConfig]:
         local_cache = CacheConfig(
             received_ttl=dt.timedelta(days=2),
             mode=Mode.UPSERT if upsert else Mode.APPEND,

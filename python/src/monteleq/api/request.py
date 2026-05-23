@@ -343,7 +343,7 @@ class CurveRequest:
     # ------------------------------------------------------------------
 
     @property
-    def endpoint(self):
+    def endpoint(self) -> str:
         if self.curve.curve_type == CurveType.INSTANCE:
             return "ensembles" if self.ensembles else "instances"
         elif self.curve.curve_type == CurveType.INSTANCE_PERIOD:
@@ -361,7 +361,7 @@ class CurveRequest:
             raise ValueError(f"Invalid curve type {self.curve.curve_type}")
 
     @property
-    def curve_type(self):
+    def curve_type(self) -> CurveType:
         return self.curve.curve_type
 
     @property
@@ -374,7 +374,7 @@ class CurveRequest:
         with_issued_range: bool = True,
         with_tags: bool = True,
         with_limit: bool = True,
-    ):
+    ) -> dict[str, Any]:
         # When the URL path already encodes issued_at (and possibly the
         # single tag), drop the corresponding query params.
         if self.curve.is_instance and self.issued_at:
