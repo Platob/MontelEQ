@@ -2,7 +2,7 @@
 # MAGIC %md
 # MAGIC # MontelEQ — Plan
 # MAGIC
-# MAGIC Fetches the curve catalog, upserts the `curated_curve_metadata`
+# MAGIC Fetches the curve catalog, upserts the `curve_metadata`
 # MAGIC referential, resolves categories, and outputs them
 # MAGIC for downstream `ingest_by_category` tasks.
 
@@ -43,7 +43,7 @@ df = client.metadata.metadata_df()
 if df.height == 0:
     raise RuntimeError("refresh_curve_metadata: no curves found")
 
-table = client.sql.table(table_name="curated_curve_metadata").ensure_created(
+table = client.sql.table(table_name="curve_metadata").ensure_created(
     CURVE_METADATA_SCHEMA
 )
 table.insert(
@@ -53,7 +53,7 @@ table.insert(
     where=col("curve_id").is_in(df["curve_id"].to_list()),
 )
 
-print(f"Upserted {df.height} curves into curated_curve_metadata")
+print(f"Upserted {df.height} curves into curve_metadata")
 
 # COMMAND ----------
 
