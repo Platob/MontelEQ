@@ -83,6 +83,7 @@ resources:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
               categories: "{{job.parameters.categories}}"
+              mode: "{{job.parameters.mode}}"
 
         - task_key: ingest_by_category
           depends_on:

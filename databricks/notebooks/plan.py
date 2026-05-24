@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, "/Workspace/Shared/MontelEQ/python/src")
 
+from yggdrasil.data.enums import Mode
 from yggdrasil.environ.parameters import SystemParameters
 
 # COMMAND ----------
@@ -22,6 +23,7 @@ class Config(SystemParameters):
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     categories: str = ""
+    mode: Mode = Mode.APPEND
 
 
 config = Config().init_job()
@@ -31,7 +33,6 @@ print(config)
 # COMMAND ----------
 
 # DBTITLE 1,Refresh curve metadata referential
-from yggdrasil.data.enums import Mode
 from yggdrasil.execution.expr.builder import col
 
 from monteleq.api.client import APIClient
@@ -49,7 +50,7 @@ table = client.sql.table(table_name="curve_metadata").ensure_created(
 )
 table.insert(
     df,
-    mode=Mode.APPEND,
+    mode=config.mode,
     match_by=["curve_id"],
     where=col("curve_id").is_in(df["curve_id"].to_list()),
 )
