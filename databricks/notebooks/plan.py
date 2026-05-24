@@ -60,6 +60,8 @@ df = client.metadata.metadata_df()
 if df.height == 0:
     raise RuntimeError("refresh_curated_curve_metadata: no curves found")
 
+spark.conf.set("spark.sql.shuffle.partitions", df.height)  # noqa: F821
+
 table = client.sql.table(table_name="curated_curve_metadata").ensure_created(
     CURVE_METADATA_SCHEMA
 )
