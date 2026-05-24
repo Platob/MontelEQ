@@ -3,19 +3,19 @@
 #   monteleq_ingestion
 #       plan → ingest_by_category (per-category fan-out)
 #
-#       When no start_date/end_date are provided (default, scheduled every hour):
-#           `plan` resolves categories from the curve catalog.
-#           `ingest_by_category` fetches the last hour, appends to curated_* tables.
+#       By default (scheduled every hour):
+#           `plan` resolves categories and pins end_date=now, seconds=3600.
+#           `ingest_by_category` fetches that window, appends to curated_* tables.
 #
-#       When start_date (and optionally end_date) are provided (manual backfill):
-#           Same plan step, but `ingest_by_category` uses the explicit
-#           date window.  `mode` can be set to `overwrite`.
+#       Manual backfill:
+#           Set `end_date` and `seconds` to cover the desired window.
+#           `mode` can be set to `overwrite`.
 #
 #   Manual backfill example:
 #
 #   databricks bundle run -t prd monteleq_ingestion \
-#       --params start_date=2024-01-01T00:00:00Z \
 #       --params end_date=2024-06-30T23:59:59Z \
+#       --params seconds=15811200 \
 #       --params mode=overwrite \
 #       --profile monteleq-prd
 #
@@ -55,10 +55,10 @@ resources:
         timezone_id: UTC
 
       parameters:
-        - name: start_date
-          default: ""
         - name: end_date
-          default: ""
+          default: "now"
+        - name: seconds
+          default: "3600"
         - name: categories
           default: ""
         - name: catalog_name
@@ -77,8 +77,8 @@ resources:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
               categories: "{{job.parameters.categories}}"
-              start_date: "{{job.parameters.start_date}}"
               end_date: "{{job.parameters.end_date}}"
+              seconds: "{{job.parameters.seconds}}"
               mode: "{{job.parameters.mode}}"
 
         - task_key: ingest_by_category
@@ -93,8 +93,8 @@ resources:
                 notebook_path: ./notebooks/ingest_by_category.py
                 base_parameters:
                   table_category: "{{input.table_category}}"
-                  start_date: "{{input.start_date}}"
                   end_date: "{{input.end_date}}"
+                  seconds: "{{input.seconds}}"
                   catalog_name: "{{job.parameters.catalog_name}}"
                   schema_name: "{{job.parameters.schema_name}}"
                   mode: "{{job.parameters.mode}}"

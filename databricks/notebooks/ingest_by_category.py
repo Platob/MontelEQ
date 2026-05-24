@@ -5,8 +5,11 @@
 # MAGIC Spark-distributed ingestion of EnergyQuantified curves for a single category.
 # MAGIC Called as a downstream task from the plan task.
 # MAGIC
-# MAGIC Receives pinned `start_date`/`end_date` from the plan task so that
+# MAGIC Receives pinned `end_date` and `seconds` from the plan task so that
 # MAGIC retries use the exact same time window.
+# MAGIC
+# MAGIC For INSTANCE curves, an additional ensembles query is generated.
+# MAGIC For curves with GBP/USD units, an additional EUR query is generated.
 
 # COMMAND ----------
 
@@ -25,30 +28,30 @@ logger = logging.getLogger(__name__)
 
 
 class Config(SystemParameters):
-    start_date: str = ""
-    end_date: str = ""
+    end_date: dt.datetime = "now"
+    seconds: int = 3600
     table_category: str = ""
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     mode: Mode = Mode.APPEND
+
+    @property
+    def start_date(self) -> dt.datetime:
+        return self.end_date - dt.timedelta(seconds=self.seconds)
 
 
 config = Config().init_job()
 
 if not config.table_category:
     raise ValueError("`table_category` is required")
-if not config.start_date:
-    raise ValueError("`start_date` is required")
-if not config.end_date:
-    raise ValueError("`end_date` is required")
 
 print(config)
 
 # COMMAND ----------
 
-# DBTITLE 1,Parse time window
-begin_dt = dt.datetime.fromisoformat(config.start_date)
-end_dt = dt.datetime.fromisoformat(config.end_date)
+# DBTITLE 1,Resolve time window
+begin_dt = config.start_date
+end_dt = config.end_date
 
 issued_at_earliest = begin_dt
 
@@ -62,8 +65,12 @@ logger.info(
 # COMMAND ----------
 
 # DBTITLE 1,Run ingestion
+from energyquantified.metadata import CurveType
+
 from monteleq.api.client import APIClient
 from monteleq.api.request import CurveRequest
+
+FOREIGN_UNITS = {"GBP", "USD"}
 
 client = APIClient(catalog_name=config.catalog_name, schema_name=config.schema_name)
 
@@ -78,8 +85,9 @@ if not curves:
 
 logger.info("Found %d curves for table_category=%s", len(curves), config.table_category)
 
-requests = [
-    CurveRequest(
+requests: list[CurveRequest] = []
+for c in curves:
+    base = CurveRequest(
         curve=c,
         begin=begin_dt,
         end=end_dt,
@@ -87,8 +95,16 @@ requests = [
         client=client,
         raise_error=False,
     )
-    for c in curves
-]
+    requests.append(base)
+
+    if c.curve_type == CurveType.INSTANCE:
+        requests.append(base.copy(ensembles=True))
+
+    if c.unit and any(cu in c.unit for cu in FOREIGN_UNITS):
+        eur_unit = c.unit
+        for cu in FOREIGN_UNITS:
+            eur_unit = eur_unit.replace(cu, "EUR")
+        requests.append(base.copy(unit=eur_unit))
 
 stats = client.ingest_spark(
     requests,

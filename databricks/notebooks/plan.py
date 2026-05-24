@@ -24,9 +24,13 @@ class Config(SystemParameters):
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     categories: str = ""
-    start_date: str = ""
-    end_date: str = ""
+    end_date: dt.datetime = "now"
+    seconds: int = 3600
     mode: Mode = Mode.APPEND
+
+    @property
+    def start_date(self) -> dt.datetime:
+        return self.end_date - dt.timedelta(seconds=self.seconds)
 
 
 config = Config().init_job()
@@ -36,28 +40,8 @@ print(config)
 # COMMAND ----------
 
 # DBTITLE 1,Resolve time window
-def _parse_dt(value: str | None) -> dt.datetime | None:
-    if not value or not value.strip():
-        return None
-    s = value.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    parsed = dt.datetime.fromisoformat(s)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed
-
-
-now = dt.datetime.now(dt.timezone.utc)
-
-begin_dt = _parse_dt(config.start_date or None)
-end_dt = _parse_dt(config.end_date or None)
-
-if begin_dt is None:
-    end_dt = now
-    begin_dt = now - dt.timedelta(hours=1)
-elif end_dt is None:
-    end_dt = now
+begin_dt = config.start_date
+end_dt = config.end_date
 
 print(f"Time window: {begin_dt} → {end_dt}")
 
@@ -105,11 +89,14 @@ print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 # COMMAND ----------
 
 # DBTITLE 1,Output for downstream tasks
-start_date_iso = begin_dt.isoformat()
 end_date_iso = end_dt.isoformat()
 
 output = [
-    {"table_category": c, "start_date": start_date_iso, "end_date": end_date_iso}
+    {
+        "table_category": c,
+        "end_date": end_date_iso,
+        "seconds": str(config.seconds),
+    }
     for c in table_categories
 ]
 
