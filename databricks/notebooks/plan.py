@@ -10,6 +10,9 @@
 # COMMAND ----------
 
 import json
+import sys
+
+sys.path.insert(0, "/Workspace/Shared/MontelEQ/python/src")
 
 from yggdrasil.environ.parameters import SystemParameters
 
