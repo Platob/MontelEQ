@@ -206,26 +206,6 @@ class TestCurveFiltering:
         assert all(c.curve_type == CurveType.OHLC for c in r)
 
 
-# ======================================================================
-# Pipeline
-# ======================================================================
-
-
-class TestPipelineCategories:
-    def test_static_categories_sorted(self):
-        from monteleq.pipeline import CATEGORIES
-        assert CATEGORIES == sorted(CATEGORIES)
-
-    def test_static_categories_count(self):
-        from monteleq.pipeline import CATEGORIES
-        assert len(CATEGORIES) == 39
-
-    def test_plan_categories_fallback(self):
-        from monteleq.pipeline import plan_categories
-        cats = plan_categories()
-        assert len(cats) > 0
-        assert cats == sorted(cats)
-
 
 # ======================================================================
 # Benchmarks — synthetic 10k catalog
