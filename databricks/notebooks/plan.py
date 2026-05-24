@@ -30,8 +30,6 @@ print(config)
 # COMMAND ----------
 
 # DBTITLE 1,Refresh curve metadata referential
-import datetime as dt
-import polars as pl
 from yggdrasil.data.enums import Mode
 from yggdrasil.execution.expr.builder import col
 
@@ -39,19 +37,11 @@ from monteleq.api.client import APIClient
 from monteleq.api.schemas import CURVE_METADATA_SCHEMA
 
 client = APIClient(catalog_name=config.catalog_name, schema_name=config.schema_name)
-curves = client.metadata.curves()
 
-if not curves:
+df = client.metadata.metadata_df()
+
+if df.height == 0:
     raise RuntimeError("refresh_curve_metadata: no curves found")
-
-now = dt.datetime.now(dt.timezone.utc)
-
-df = pl.DataFrame(
-    [c.to_metadata_row(now=now) for c in curves],
-    schema=CURVE_METADATA_SCHEMA.to_polars_schema(),
-)
-
-curve_ids = tuple(c.id for c in curves)
 
 table = client.sql.table(table_name="curated_curve_metadata").ensure_created(
     CURVE_METADATA_SCHEMA
@@ -60,16 +50,16 @@ table.insert(
     df,
     mode=Mode.APPEND,
     match_by=["curve_id"],
-    where=col("curve_id").is_in(curve_ids),
+    where=col("curve_id").is_in(df["curve_id"].to_list()),
     prune_by="auto",
 )
 
-print(f"Upserted {len(curves)} curves into curated_curve_metadata")
+print(f"Upserted {df.height} curves into curated_curve_metadata")
 
 # COMMAND ----------
 
 # DBTITLE 1,Resolve table categories
-table_categories = sorted({c.table_name(prefix="curated_") for c in curves})
+table_categories = sorted(df["table_category"].unique().to_list())
 
 print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 
