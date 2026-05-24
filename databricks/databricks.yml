@@ -43,11 +43,6 @@ variables:
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
 
-artifacts:
-  monteleq_wheel:
-    type: whl
-    path: ../python
-
 resources:
   jobs:
     monteleq_ingestion:
@@ -85,8 +80,6 @@ resources:
             base_parameters:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
-          libraries:
-            - whl: ../dist/*.whl
 
         - task_key: ingest_by_category
           depends_on:
@@ -107,8 +100,6 @@ resources:
                   schema_name: "{{job.parameters.schema_name}}"
                   period_hours: "{{job.parameters.period_hours}}"
                   mode: "{{job.parameters.mode}}"
-              libraries:
-                - whl: ../dist/*.whl
 
 targets:
   dev:

@@ -13,6 +13,10 @@
 
 # COMMAND ----------
 
+import sys
+
+sys.path.insert(0, "/Workspace/Shared/MontelEQ/python/src")
+
 from yggdrasil.data.enums import Mode
 from yggdrasil.environ.parameters import SystemParameters
 
