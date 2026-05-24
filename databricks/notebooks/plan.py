@@ -8,11 +8,13 @@
 
 # COMMAND ----------
 
+import datetime as dt
 import json
 import sys
 
 sys.path.insert(0, "/Workspace/Shared/MontelEQ/python/src")
 
+from yggdrasil.data.enums import Mode
 from yggdrasil.environ.parameters import SystemParameters
 
 # COMMAND ----------
@@ -21,6 +23,14 @@ from yggdrasil.environ.parameters import SystemParameters
 class Config(SystemParameters):
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
+    categories: str = ""
+    end_date: dt.datetime = "now"
+    seconds: int = 3600
+    mode: Mode = Mode.APPEND
+
+    @property
+    def start_date(self) -> dt.datetime:
+        return self.end_date - dt.timedelta(seconds=self.seconds)
 
 
 config = Config().init_job()
@@ -29,8 +39,15 @@ print(config)
 
 # COMMAND ----------
 
+# DBTITLE 1,Resolve time window
+begin_dt = config.start_date
+end_dt = config.end_date
+
+print(f"Time window: {begin_dt} → {end_dt}")
+
+# COMMAND ----------
+
 # DBTITLE 1,Refresh curve metadata referential
-from yggdrasil.data.enums import Mode
 from yggdrasil.execution.expr.builder import col
 
 from monteleq.api.client import APIClient
@@ -48,7 +65,7 @@ table = client.sql.table(table_name="curve_metadata").ensure_created(
 )
 table.insert(
     df,
-    mode=Mode.APPEND,
+    mode=config.mode,
     match_by=["curve_id"],
     where=col("curve_id").is_in(df["curve_id"].to_list()),
 )
@@ -60,9 +77,27 @@ print(f"Upserted {df.height} curves into curve_metadata")
 # DBTITLE 1,Resolve table categories
 table_categories = sorted(df["table_category"].unique().to_list())
 
+if config.categories:
+    requested = [c.strip() for c in config.categories.split(",") if c.strip()]
+    unknown = set(requested) - set(table_categories)
+    if unknown:
+        raise ValueError(f"Unknown categories: {sorted(unknown)}")
+    table_categories = [c for c in table_categories if c in requested]
+
 print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 
 # COMMAND ----------
 
 # DBTITLE 1,Output for downstream tasks
-dbutils.notebook.exit(json.dumps(table_categories))  # noqa: F821
+end_date_iso = end_dt.isoformat()
+
+output = [
+    {
+        "table_category": c,
+        "end_date": end_date_iso,
+        "seconds": str(config.seconds),
+    }
+    for c in table_categories
+]
+
+dbutils.notebook.exit(json.dumps(output))  # noqa: F821

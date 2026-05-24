@@ -3,25 +3,26 @@
 #   monteleq_ingestion
 #       plan → ingest_by_category (per-category fan-out)
 #
-#       Supports two modes via the `latest` job parameter:
+#       By default (scheduled every hour):
+#           `plan` resolves categories and pins end_date=now, seconds=3600.
+#           `ingest_by_category` fetches that window, appends to curated_* tables.
 #
-#       latest=true (default, scheduled every hour):
-#           `plan` resolves categories from the curve catalog.
-#           `ingest_by_category` fetches the last `period_hours`,
-#           appends to curated_* tables.
-#
-#       latest=false (manual backfill):
-#           Same plan step, but `ingest_by_category` uses explicit
-#           `start`/`end` window.  `mode` can be set to `overwrite`.
+#       Manual backfill:
+#           Set `end_date` and `seconds` to cover the desired window.
+#           `mode` can be set to `overwrite`.
 #
 #   Manual backfill example:
 #
 #   databricks bundle run -t prd monteleq_ingestion \
-#       --params latest=false \
-#       --params start=2024-01-01T00:00:00Z \
-#       --params end=2024-06-30T23:59:59Z \
+#       --params end_date=2024-06-30T23:59:59Z \
+#       --params seconds=15811200 \
 #       --params mode=overwrite \
 #       --profile monteleq-prd
+#
+#   Relaunch specific categories only:
+#
+#   databricks bundle run -t prd monteleq_ingestion \
+#       --params categories=curated_actual_timeseries_power,curated_forecast_instance_wind
 
 bundle:
   name: monteleq
@@ -36,9 +37,6 @@ variables:
   cluster_id:
     description: "Cluster for HTTP-heavy raw+curate work."
     default: 0522-063219-lfvirtho
-  period_hours:
-    description: "Lookback window in hours when latest=true."
-    default: "1"
 
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
@@ -57,18 +55,16 @@ resources:
         timezone_id: UTC
 
       parameters:
-        - name: latest
-          default: "true"
-        - name: start
-          default: ""
-        - name: end
+        - name: end_date
+          default: "now"
+        - name: seconds
+          default: "3600"
+        - name: categories
           default: ""
         - name: catalog_name
           default: ${var.catalog_name}
         - name: schema_name
           default: ${var.schema_name}
-        - name: period_hours
-          default: ${var.period_hours}
         - name: mode
           default: append
 
@@ -80,6 +76,10 @@ resources:
             base_parameters:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
+              categories: "{{job.parameters.categories}}"
+              end_date: "{{job.parameters.end_date}}"
+              seconds: "{{job.parameters.seconds}}"
+              mode: "{{job.parameters.mode}}"
 
         - task_key: ingest_by_category
           depends_on:
@@ -92,13 +92,11 @@ resources:
               notebook_task:
                 notebook_path: ./notebooks/ingest_by_category.py
                 base_parameters:
-                  table_category: "{{input}}"
-                  latest: "{{job.parameters.latest}}"
-                  start: "{{job.parameters.start}}"
-                  end: "{{job.parameters.end}}"
+                  table_category: "{{input.table_category}}"
+                  end_date: "{{input.end_date}}"
+                  seconds: "{{input.seconds}}"
                   catalog_name: "{{job.parameters.catalog_name}}"
                   schema_name: "{{job.parameters.schema_name}}"
-                  period_hours: "{{job.parameters.period_hours}}"
                   mode: "{{job.parameters.mode}}"
 
 targets:

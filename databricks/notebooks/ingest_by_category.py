@@ -5,11 +5,11 @@
 # MAGIC Spark-distributed ingestion of EnergyQuantified curves for a single category.
 # MAGIC Called as a downstream task from the plan task.
 # MAGIC
-# MAGIC * **latest=True** (default, scheduled) — uses `period_hours` as a
-# MAGIC   lookback window from now.  Incremental append.
-# MAGIC * **latest=False** (manual backfill) — uses explicit `start`/`end`
-# MAGIC   datetime range.  `mode` can be set to `overwrite` to replace
-# MAGIC   curated data for the window.
+# MAGIC Receives pinned `end_date` and `seconds` from the plan task so that
+# MAGIC retries use the exact same time window.
+# MAGIC
+# MAGIC For INSTANCE curves, an additional ensembles query is generated.
+# MAGIC For curves with GBP/USD units, an additional EUR query is generated.
 
 # COMMAND ----------
 
@@ -28,65 +28,49 @@ logger = logging.getLogger(__name__)
 
 
 class Config(SystemParameters):
-    latest: bool = True
-    start: str = ""
-    end: str = ""
+    end_date: dt.datetime = "now"
+    seconds: int = 3600
     table_category: str = ""
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
-    period_hours: int = 1
     mode: Mode = Mode.APPEND
+
+    @property
+    def start_date(self) -> dt.datetime:
+        return self.end_date - dt.timedelta(seconds=self.seconds)
 
 
 config = Config().init_job()
 
 if not config.table_category:
-    raise ValueError("`table_category` widget is required")
+    raise ValueError("`table_category` is required")
 
 print(config)
 
 # COMMAND ----------
 
 # DBTITLE 1,Resolve time window
-def _parse_dt(value: str | None) -> dt.datetime | None:
-    if not value or not value.strip():
-        return None
-    s = value.strip()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    parsed = dt.datetime.fromisoformat(s)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed
-
-
-now = dt.datetime.now(dt.timezone.utc)
-
-if config.latest:
-    end_dt = now
-    begin_dt = now - dt.timedelta(hours=config.period_hours)
-else:
-    begin_dt = _parse_dt(config.start or None)
-    end_dt = _parse_dt(config.end or None)
-    if begin_dt is None:
-        raise ValueError("`start` is required when latest=False")
-    if end_dt is None:
-        end_dt = now
+begin_dt = config.start_date
+end_dt = config.end_date
 
 issued_at_earliest = begin_dt
 
 insert_mode = config.mode.name if config.mode != Mode.APPEND else None
 
 logger.info(
-    "Starting ingestion: table_category=%s begin=%s end=%s latest=%s insert_mode=%s",
-    config.table_category, begin_dt, end_dt, config.latest, insert_mode or "append",
+    "Starting ingestion: table_category=%s begin=%s end=%s insert_mode=%s",
+    config.table_category, begin_dt, end_dt, insert_mode or "append",
 )
 
 # COMMAND ----------
 
 # DBTITLE 1,Run ingestion
+from energyquantified.metadata import CurveType
+
 from monteleq.api.client import APIClient
 from monteleq.api.request import CurveRequest
+
+FOREIGN_UNITS = {"GBP", "USD"}
 
 client = APIClient(catalog_name=config.catalog_name, schema_name=config.schema_name)
 
@@ -101,8 +85,9 @@ if not curves:
 
 logger.info("Found %d curves for table_category=%s", len(curves), config.table_category)
 
-requests = [
-    CurveRequest(
+requests: list[CurveRequest] = []
+for c in curves:
+    base = CurveRequest(
         curve=c,
         begin=begin_dt,
         end=end_dt,
@@ -110,8 +95,16 @@ requests = [
         client=client,
         raise_error=False,
     )
-    for c in curves
-]
+    requests.append(base)
+
+    if c.curve_type == CurveType.INSTANCE:
+        requests.append(base.copy(ensembles=True))
+
+    if c.unit and any(cu in c.unit for cu in FOREIGN_UNITS):
+        eur_unit = c.unit
+        for cu in FOREIGN_UNITS:
+            eur_unit = eur_unit.replace(cu, "EUR")
+        requests.append(base.copy(unit=eur_unit))
 
 stats = client.ingest_spark(
     requests,
