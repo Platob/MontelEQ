@@ -102,4 +102,5 @@ output = [
     for c in table_categories
 ]
 
+dbutils.jobs.taskValues.set(key="categories", value=output)  # noqa: F821
 dbutils.notebook.exit(json.dumps(output))  # noqa: F821
