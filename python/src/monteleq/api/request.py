@@ -1,5 +1,4 @@
 import datetime as dt
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable, Union, Iterator
 from zoneinfo import ZoneInfo
 
@@ -86,73 +85,88 @@ def _effective_timezone(
     return _normalize_timezone_param(timezone or "UTC")
 
 
-@dataclass
 class CurveRequest:
     """Domain-level description of a curve fetch."""
 
-    curve: Curve = field(default_factory=lambda: Curve(name=""))
-    begin: dt.datetime | None = None
-    end: dt.datetime | None = None
-    issued_at: dt.datetime | None = None
-    issued_at_earliest: dt.datetime | None = None
-    issued_at_latest: dt.datetime | None = None
-    request_tags: list[str] = field(default_factory=list)
-    limit: int | None = None
-    exclude_tags: list[str] = field(default_factory=list)
-    ensembles: bool = False
-    timezone: str | None = None
-    unit: str | None = None
-    frequency: str | None = None
-    event_type: EventType | None = None
-    raise_error: bool = True
-    tags: dict[str, str] = field(default_factory=dict)
-    client: "APIClient | None" = field(default=None, repr=False, compare=False)
+    def __init__(
+        self,
+        curve: Curve | None = None,
+        begin: dt.datetime | None = None,
+        end: dt.datetime | None = None,
+        issued_at: dt.datetime | None = None,
+        issued_at_earliest: dt.datetime | None = None,
+        issued_at_latest: dt.datetime | None = None,
+        request_tags: list[str] | None = None,
+        limit: int | None = None,
+        exclude_tags: list[str] | None = None,
+        ensembles: bool = False,
+        timezone: str | None = None,
+        unit: str | None = None,
+        frequency: str | None = None,
+        event_type: EventType | None = None,
+        raise_error: bool = True,
+        tags: dict[str, str] | None = None,
+        client: "APIClient | None" = None,
+    ) -> None:
+        self.curve = curve if curve is not None else Curve(name="")
+        self.ensembles = ensembles
+        self.event_type = event_type
+        self.raise_error = raise_error
+        self.client = client
 
-    def __post_init__(self) -> None:
         if not isinstance(self.curve, Curve):
             raise TypeError(f"curve must be a Curve instance, got {type(self.curve).__name__}")
 
         now = dt.datetime.now(dt.timezone.utc)
 
-        self.end = any_to_datetime(self.end or now, tz=dt.timezone.utc)
+        self.end = any_to_datetime(end or now, tz=dt.timezone.utc)
         self.begin = any_to_datetime(
-            self.begin or self.end - dt.timedelta(days=14),
+            begin or self.end - dt.timedelta(days=14),
             tz=dt.timezone.utc,
         )
 
-        if self.issued_at:
-            self.issued_at = any_to_datetime(self.issued_at, tz=dt.timezone.utc)
+        if issued_at:
+            self.issued_at = any_to_datetime(issued_at, tz=dt.timezone.utc)
+        else:
+            self.issued_at = None
 
         self.issued_at_latest = any_to_datetime(
-            self.issued_at_latest or now, tz=dt.timezone.utc
+            issued_at_latest or now, tz=dt.timezone.utc
         )
         self.issued_at_earliest = any_to_datetime(
-            self.issued_at_earliest or self.issued_at_latest - dt.timedelta(days=7),
+            issued_at_earliest or self.issued_at_latest - dt.timedelta(days=7),
             tz=dt.timezone.utc,
         )
 
-        if self.request_tags:
-            if isinstance(self.request_tags, str):
-                self.request_tags = [self.request_tags]
+        if request_tags:
+            if isinstance(request_tags, str):
+                self.request_tags = [request_tags]
             else:
-                self.request_tags = [str(t) for t in self.request_tags if t]
+                self.request_tags = [str(t) for t in request_tags if t]
         else:
             self.request_tags = []
 
+        self.exclude_tags = list(exclude_tags) if exclude_tags else []
+        self.tags = dict(tags) if tags else {}
+
         if self.curve.curve_type == CurveType.INSTANCE_PERIOD:
-            self.limit = max(1, min(int(self.limit or 20), 20))
+            self.limit = max(1, min(int(limit or 20), 20))
         elif self.curve.curve_type == CurveType.INSTANCE:
             self.limit = max(
-                1, min(int(self.limit or 25), 10 if self.ensembles else 25)
+                1, min(int(limit or 25), 10 if self.ensembles else 25)
             )
         else:
             self.limit = None
 
-        if not self.frequency:
+        if not frequency:
             self.frequency = self.curve.resolution.frequency
+        else:
+            self.frequency = frequency
 
-        if not self.unit:
+        if not unit:
             self.unit = self.curve.unit
+        else:
+            self.unit = unit
 
         self.timezone = _effective_timezone(self.curve, self.frequency, self.timezone)
 

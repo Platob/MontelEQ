@@ -58,6 +58,7 @@ class APIClient(BaseClient):
         mode: str | None = None,
         verify: bool = True,
         pool_maxsize: int = 10,
+        **kwargs,
     ) -> None:
         super().__init__(
             base_url,
@@ -66,6 +67,7 @@ class APIClient(BaseClient):
             mode=mode,
             verify=verify,
             pool_maxsize=pool_maxsize,
+            **kwargs,
         )
         self.metadata = MetadataClient(self)
         self.events = EventsClient(self)
