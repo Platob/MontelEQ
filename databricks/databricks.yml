@@ -92,9 +92,9 @@ resources:
               notebook_task:
                 notebook_path: ./notebooks/ingest_by_category.py
                 base_parameters:
-                  table_category: "{{input}}"
-                  start_date: "{{job.parameters.start_date}}"
-                  end_date: "{{job.parameters.end_date}}"
+                  table_category: "{{input.table_category}}"
+                  start_date: "{{input.start_date}}"
+                  end_date: "{{input.end_date}}"
                   catalog_name: "{{job.parameters.catalog_name}}"
                   schema_name: "{{job.parameters.schema_name}}"
                   mode: "{{job.parameters.mode}}"

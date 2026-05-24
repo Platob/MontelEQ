@@ -105,4 +105,12 @@ print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 # COMMAND ----------
 
 # DBTITLE 1,Output for downstream tasks
-dbutils.notebook.exit(json.dumps(table_categories))  # noqa: F821
+start_date_iso = begin_dt.isoformat()
+end_date_iso = end_dt.isoformat()
+
+output = [
+    {"table_category": c, "start_date": start_date_iso, "end_date": end_date_iso}
+    for c in table_categories
+]
+
+dbutils.notebook.exit(json.dumps(output))  # noqa: F821
