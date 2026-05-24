@@ -366,7 +366,6 @@ class APIClient(BaseClient):
                     mode=insert_mode,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     where=_curve_id_predicate(curve_ids),
-                    prune_by="auto",
                 )
             except Exception:
                 logger.exception("Insert failed for table %s", tb)
@@ -433,7 +432,6 @@ class APIClient(BaseClient):
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     wait=False,
                     where=_curve_id_predicate(curve_ids),
-                    prune_by="auto",
                 )
             except Exception:
                 logger.exception("Insert failed for table %s", tb)

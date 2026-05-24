@@ -51,7 +51,6 @@ table.insert(
     mode=Mode.APPEND,
     match_by=["curve_id"],
     where=col("curve_id").is_in(df["curve_id"].to_list()),
-    prune_by="auto",
 )
 
 print(f"Upserted {df.height} curves into curated_curve_metadata")
