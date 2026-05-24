@@ -5,11 +5,11 @@
 # MAGIC Spark-distributed ingestion of EnergyQuantified curves for a single category.
 # MAGIC Called as a downstream task from the plan task.
 # MAGIC
-# MAGIC * **latest=True** (default, scheduled) — uses `period_hours` as a
-# MAGIC   lookback window from now.  Incremental append.
-# MAGIC * **latest=False** (manual backfill) — uses explicit `start_date`/`end_date`
-# MAGIC   datetime range.  `mode` can be set to `overwrite` to replace
-# MAGIC   curated data for the window.
+# MAGIC * When no `start_date`/`end_date` are provided (default, scheduled) —
+# MAGIC   uses `period_hours` as a lookback window from now.  Incremental append.
+# MAGIC * When `start_date` (and optionally `end_date`) are provided (manual backfill) —
+# MAGIC   uses the explicit datetime range.  `mode` can be set to `overwrite`
+# MAGIC   to replace curated data for the window.
 
 # COMMAND ----------
 
@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 
 class Config(SystemParameters):
-    latest: bool = True
     start_date: str = ""
     end_date: str = ""
     table_category: str = ""
@@ -62,16 +61,16 @@ def _parse_dt(value: str | None) -> dt.datetime | None:
 
 now = dt.datetime.now(dt.timezone.utc)
 
-if config.latest:
+begin_dt = _parse_dt(config.start_date or None)
+end_dt = _parse_dt(config.end_date or None)
+
+latest = begin_dt is None
+
+if latest:
     end_dt = now
     begin_dt = now - dt.timedelta(hours=config.period_hours)
-else:
-    begin_dt = _parse_dt(config.start_date or None)
-    end_dt = _parse_dt(config.end_date or None)
-    if begin_dt is None:
-        raise ValueError("`start_date` is required when latest=False")
-    if end_dt is None:
-        end_dt = now
+elif end_dt is None:
+    end_dt = now
 
 issued_at_earliest = begin_dt
 
@@ -79,7 +78,7 @@ insert_mode = config.mode.name if config.mode != Mode.APPEND else None
 
 logger.info(
     "Starting ingestion: table_category=%s begin=%s end=%s latest=%s insert_mode=%s",
-    config.table_category, begin_dt, end_dt, config.latest, insert_mode or "append",
+    config.table_category, begin_dt, end_dt, latest, insert_mode or "append",
 )
 
 # COMMAND ----------
