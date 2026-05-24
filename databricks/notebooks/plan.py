@@ -21,6 +21,7 @@ from yggdrasil.environ.parameters import SystemParameters
 class Config(SystemParameters):
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
+    categories: str = ""
 
 
 config = Config().init_job()
@@ -59,6 +60,13 @@ print(f"Upserted {df.height} curves into curve_metadata")
 
 # DBTITLE 1,Resolve table categories
 table_categories = sorted(df["table_category"].unique().to_list())
+
+if config.categories:
+    requested = [c.strip() for c in config.categories.split(",") if c.strip()]
+    unknown = set(requested) - set(table_categories)
+    if unknown:
+        raise ValueError(f"Unknown categories: {sorted(unknown)}")
+    table_categories = [c for c in table_categories if c in requested]
 
 print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 

@@ -7,7 +7,7 @@
 # MAGIC
 # MAGIC * **latest=True** (default, scheduled) — uses `period_hours` as a
 # MAGIC   lookback window from now.  Incremental append.
-# MAGIC * **latest=False** (manual backfill) — uses explicit `start`/`end`
+# MAGIC * **latest=False** (manual backfill) — uses explicit `start_date`/`end_date`
 # MAGIC   datetime range.  `mode` can be set to `overwrite` to replace
 # MAGIC   curated data for the window.
 
@@ -29,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 class Config(SystemParameters):
     latest: bool = True
-    start: str = ""
-    end: str = ""
+    start_date: str = ""
+    end_date: str = ""
     table_category: str = ""
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
@@ -66,10 +66,10 @@ if config.latest:
     end_dt = now
     begin_dt = now - dt.timedelta(hours=config.period_hours)
 else:
-    begin_dt = _parse_dt(config.start or None)
-    end_dt = _parse_dt(config.end or None)
+    begin_dt = _parse_dt(config.start_date or None)
+    end_dt = _parse_dt(config.end_date or None)
     if begin_dt is None:
-        raise ValueError("`start` is required when latest=False")
+        raise ValueError("`start_date` is required when latest=False")
     if end_dt is None:
         end_dt = now
 
