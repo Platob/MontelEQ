@@ -59,11 +59,7 @@ class MetadataClient:
         )
 
     def fetch(self) -> Response:
-        if self._base._databricks:
-            cache = self._base.check_cache_param(cache=None, table_name="raw_metadata_curves")
-        else:
-            cache = None
-        return self._base.send(self.request(), remote_cache=cache, local_cache=dt.timedelta(days=7))
+        return self._base.send(self.request(), local_cache=dt.timedelta(days=7))
 
     # ------------------------------------------------------------------
     # In-memory curve map
