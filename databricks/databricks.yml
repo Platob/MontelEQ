@@ -92,7 +92,7 @@ resources:
               notebook_task:
                 notebook_path: ./notebooks/ingest_by_category.py
                 base_parameters:
-                  curve_category: "{{input}}"
+                  table_category: "{{input}}"
                   latest: "{{job.parameters.latest}}"
                   start: "{{job.parameters.start}}"
                   end: "{{job.parameters.end}}"

@@ -9,7 +9,9 @@ from typing import Optional, TYPE_CHECKING, Iterable
 
 from energyquantified.metadata import CurveType, DataType
 
-from monteleq.model import Curve
+from yggdrasil.io.send_config import CacheConfig, SendConfig
+
+from monteleq.model import Curve, _xxh3_id, _safe_name
 
 if TYPE_CHECKING:
     from yggdrasil.io.request import PreparedRequest
@@ -31,12 +33,8 @@ class MetadataClient:
 
     def __init__(self, base: "BaseClient") -> None:
         self._base = base
+        self._df: pl.DataFrame | None = None
         self._curves: dict[str, Curve] | None = None
-        # Cached name index for vectorized matching. `_name_keys` is the
-        # original-case key list (positionally aligned with `_name_lc_values`).
-        # `_name_lc_values` is a polars Utf8 Series of lowercased names — the
-        # lowercasing is done once in Rust and held for the lifetime of the
-        # curvemap. Built lazily on first use of the substring/glob path.
         self._name_keys: tuple[str, ...] | None = None
         self._name_lc_values: pl.Series | None = None
 
@@ -56,14 +54,18 @@ class MetadataClient:
             url="metadata/curves/",
             headers={"Accept": "application/json", "Accept-Encoding": "gzip"},
             tags={"endpoint": "metadata_curves"},
+            send_config=SendConfig(
+                local_cache=CacheConfig(received_ttl=dt.timedelta(days=7)),
+            ),
         )
 
     def fetch(self) -> Response:
-        if self._base._databricks:
-            cache = self._base.check_cache_param(cache=None, table_name="raw_metadata_curves")
-        else:
-            cache = None
-        return self._base.send(self.request(), remote_cache=cache, local_cache=dt.timedelta(days=7))
+        return self.request().attach_session(self._base).send()
+
+    def fetch_df(self) -> pl.DataFrame:
+        if self._df is None:
+            self._df = pl.from_arrow(self.fetch().to_arrow_table())
+        return self._df
 
     # ------------------------------------------------------------------
     # In-memory curve map
@@ -75,10 +77,41 @@ class MetadataClient:
             with self._base._lock:
                 if self._curves is None:
                     self._curves = {
-                        infos["name"]: Curve.parse_mapping(infos)
-                        for infos in self.fetch().json()
+                        row["name"]: Curve.parse_mapping(row)
+                        for row in self.fetch_df().iter_rows(named=True)
                     }
         return self._curves
+
+    def metadata_df(self, *, now: dt.datetime | None = None) -> pl.DataFrame:
+        from monteleq.api.schemas import CURVE_METADATA_SCHEMA
+
+        if now is None:
+            now = dt.datetime.now(dt.timezone.utc)
+
+        df = self.fetch_df()
+
+        return df.select(
+            pl.col("name").map_elements(_xxh3_id, return_dtype=pl.Int64).alias("curve_id"),
+            pl.col("name").alias("curve_name"),
+            pl.col("curve_type"),
+            pl.col("data_type").alias("curve_data_type"),
+            pl.col("area").alias("curve_area"),
+            pl.col("area_sink").alias("curve_area_sink"),
+            pl.col("commodity").alias("curve_commodity"),
+            pl.col("source").alias("curve_source"),
+            pl.col("unit").alias("curve_unit"),
+            pl.col("denominator").alias("curve_denominator"),
+            pl.col("categories").alias("curve_categories"),
+            pl.col("resolution").struct.field("frequency").alias("curve_resolution_frequency"),
+            pl.col("resolution").struct.field("timezone").alias("curve_resolution_timezone"),
+            pl.col("access").struct.field("by").alias("curve_access_by"),
+            pl.col("access").struct.field("package").alias("curve_access_package"),
+            pl.col("instance_issued_timezone").alias("curve_instance_issued_timezone"),
+            pl.struct("data_type", "curve_type", "categories")
+            .map_elements(_table_category, return_dtype=pl.Utf8)
+            .alias("table_category"),
+            pl.lit(now).alias("updated_at"),
+        ).cast(CURVE_METADATA_SCHEMA.to_polars_schema())
 
     def _name_index(self) -> tuple[tuple[str, ...], pl.Series]:
         """Lazily-built (original_keys, lowercased_values_series).
@@ -300,6 +333,15 @@ class MetadataClient:
 # ----------------------------------------------------------------------
 # Module-level helpers
 # ----------------------------------------------------------------------
+
+def _table_category(row: dict) -> str:
+    dt_name = _safe_name(row["data_type"] or "") or "none"
+    ct_name = _safe_name(row["curve_type"] or "") or "none"
+    cats = row["categories"] or []
+    parts = [_safe_name(c) for c in cats[:2] if _safe_name(c)]
+    cat_suffix = "_" + "_".join(parts) if parts else ""
+    return f"curated_{dt_name}_{ct_name}{cat_suffix}"
+
 
 def _compile_name_patterns(patterns: tuple[str, ...]) -> re.Pattern[str]:
     """

@@ -31,7 +31,7 @@ class Config(SystemParameters):
     latest: bool = True
     start: str = ""
     end: str = ""
-    curve_category: str = ""
+    table_category: str = ""
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     period_hours: int = 1
@@ -40,8 +40,8 @@ class Config(SystemParameters):
 
 config = Config().init_job()
 
-if not config.curve_category:
-    raise ValueError("`curve_category` widget is required")
+if not config.table_category:
+    raise ValueError("`table_category` widget is required")
 
 print(config)
 
@@ -78,8 +78,8 @@ issued_at_earliest = begin_dt
 insert_mode = config.mode.name if config.mode != Mode.APPEND else None
 
 logger.info(
-    "Starting ingestion: category=%s begin=%s end=%s latest=%s insert_mode=%s",
-    config.curve_category, begin_dt, end_dt, config.latest, insert_mode or "append",
+    "Starting ingestion: table_category=%s begin=%s end=%s latest=%s insert_mode=%s",
+    config.table_category, begin_dt, end_dt, config.latest, insert_mode or "append",
 )
 
 # COMMAND ----------
@@ -90,13 +90,16 @@ from monteleq.api.request import CurveRequest
 
 client = APIClient(catalog_name=config.catalog_name, schema_name=config.schema_name)
 
-curves = client.metadata.curves(categories=config.curve_category)
+curves = [
+    c for c in client.metadata.curves()
+    if c.table_name(prefix="curated_") == config.table_category
+]
 if not curves:
-    logger.warning("No curves found for category=%s", config.curve_category)
-    print({"category": config.curve_category, "curves": 0, "status": "empty"})
+    logger.warning("No curves found for table_category=%s", config.table_category)
+    print({"table_category": config.table_category, "curves": 0, "status": "empty"})
     dbutils.notebook.exit("empty")  # noqa: F821
 
-logger.info("Found %d curves for category=%s", len(curves), config.curve_category)
+logger.info("Found %d curves for table_category=%s", len(curves), config.table_category)
 
 requests = [
     CurveRequest(
@@ -117,7 +120,7 @@ stats = client.ingest_spark(
     insert_mode=insert_mode,
 )
 
-result = {"category": config.curve_category, "curves": len(curves), **stats}
+result = {"table_category": config.table_category, "curves": len(curves), **stats}
 logger.info("Ingestion complete: %s", result)
 
 # COMMAND ----------

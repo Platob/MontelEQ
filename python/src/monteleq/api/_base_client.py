@@ -15,7 +15,7 @@ from yggdrasil.environ import PyEnv
 from yggdrasil.http_ import HTTPSession
 from yggdrasil.http_.session import Authorization, WaitingConfig
 from yggdrasil.io import URL
-from yggdrasil.io.send_config import CacheConfig
+from yggdrasil.io.send_config import CacheConfig, SendConfig
 
 from monteleq.model import Curve
 
@@ -131,18 +131,19 @@ class BaseClient(HTTPSession):
 
         return cache
 
-    def cache_configs(
+    def send_config(
         self,
         curve: Curve,
         upsert: bool,
-    ) -> tuple[CacheConfig, CacheConfig]:
-        local_cache = CacheConfig(
-            received_ttl=dt.timedelta(days=2),
-            mode=Mode.UPSERT if upsert else Mode.APPEND,
+    ) -> SendConfig:
+        mode = Mode.UPSERT if upsert else Mode.APPEND
+        return SendConfig(
+            local_cache=CacheConfig(
+                received_ttl=dt.timedelta(days=2),
+                mode=mode,
+            ),
+            remote_cache=CacheConfig(
+                tabular=self.check_cache_param(cache=None, curve=curve, prefix="raw_"),
+                mode=mode,
+            ),
         )
-        remote_cache = CacheConfig(
-            tabular=self.check_cache_param(cache=None, curve=curve, prefix="raw_"),
-            mode=Mode.UPSERT if upsert else Mode.APPEND,
-        )
-
-        return local_cache, remote_cache

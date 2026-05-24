@@ -13,7 +13,7 @@ from yggdrasil.io.request import PreparedRequest
 from monteleq.model import Curve, DEFAULT_ISSUE_INTERVAL
 
 if TYPE_CHECKING:
-    from yggdrasil.io.send_config import CacheConfig
+    from yggdrasil.io.send_config import SendConfig
     from .client import APIClient
 
 __all__ = [
@@ -179,16 +179,16 @@ class CurveRequest:
             merged.update(self.tags)
         return merged
 
-    def _cache_configs(self) -> tuple["CacheConfig | None", "CacheConfig | None"]:
+    def _send_config(self) -> "SendConfig | None":
         if self.client is None:
-            return None, None
+            return None
 
         now = dt.datetime.now(dt.timezone.utc)
         upsert = (
             self.event_type == EventType.CURVE_UPDATE
             or (self.end > now if self.end else False)
         )
-        return self.client.cache_configs(curve=self.curve, upsert=upsert)
+        return self.client.send_config(curve=self.curve, upsert=upsert)
 
     def to_request(self) -> PreparedRequest:
         base_url = (
@@ -198,8 +198,6 @@ class CurveRequest:
         )
         url = (base_url / self._url_path()).with_query_items(self.parameters())
 
-        local_cache, remote_cache = self._cache_configs()
-
         request = PreparedRequest(
             method="GET",
             url=url,
@@ -207,8 +205,7 @@ class CurveRequest:
             tags=self._merged_tags(),
             buffer=None,
             sent_at=None,
-            local_cache_config=local_cache,
-            remote_cache_config=remote_cache,
+            send_config=self._send_config(),
         )
         if self.client is not None:
             request.attach_session(self.client)
