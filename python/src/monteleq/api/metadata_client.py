@@ -104,8 +104,8 @@ class MetadataClient:
             pl.col("categories").alias("curve_categories"),
             pl.col("resolution").struct.field("frequency").alias("curve_resolution_frequency"),
             pl.col("resolution").struct.field("timezone").alias("curve_resolution_timezone"),
-            pl.col("access").struct.field("by").alias("curve_access_by"),
-            pl.col("access").struct.field("package").alias("curve_access_package"),
+            pl.lit(None).alias("curve_access_by"),
+            pl.lit(None).alias("curve_access_package"),
             pl.col("instance_issued_timezone").alias("curve_instance_issued_timezone"),
             pl.struct("data_type", "curve_type", "categories")
             .map_elements(_table_category, return_dtype=pl.Utf8)
