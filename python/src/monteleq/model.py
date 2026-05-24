@@ -253,11 +253,11 @@ class Curve:
             "curve_access_by": self.access.by,
             "curve_access_package": self.access.package,
             "curve_instance_issued_timezone": self.instance_issued_timezone,
-            "table_category": self.table_name(prefix="curated_"),
+            "table_category": self.table_name(),
             "updated_at": now,
         }
 
-    def table_name(self, prefix: str = "") -> str:
+    def table_name(self, prefix: str = "curated_") -> str:
         key = (self.data_type.name, self.curve_type.name, self.categories[:2], prefix)
         cached = _TABLE_NAME_CACHE.get(key)
         if cached is not None:
