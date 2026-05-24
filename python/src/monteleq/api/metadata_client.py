@@ -56,6 +56,11 @@ class MetadataClient:
             tags={"endpoint": "metadata_curves"},
             send_config=SendConfig(
                 local_cache=CacheConfig(received_ttl=dt.timedelta(days=7)),
+                remote_cache=CacheConfig(
+                    tabular=self._base.check_cache_param(
+                        cache=None, table_name="raw_metadata_curves",
+                    ),
+                ),
             ),
         )
 
