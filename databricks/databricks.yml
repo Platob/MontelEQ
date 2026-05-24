@@ -77,6 +77,8 @@ resources:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
               categories: "{{job.parameters.categories}}"
+              start_date: "{{job.parameters.start_date}}"
+              end_date: "{{job.parameters.end_date}}"
               mode: "{{job.parameters.mode}}"
 
         - task_key: ingest_by_category

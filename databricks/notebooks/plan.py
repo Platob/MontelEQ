@@ -8,6 +8,7 @@
 
 # COMMAND ----------
 
+import datetime as dt
 import json
 import sys
 
@@ -23,12 +24,42 @@ class Config(SystemParameters):
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     categories: str = ""
+    start_date: str = ""
+    end_date: str = ""
     mode: Mode = Mode.APPEND
 
 
 config = Config().init_job()
 
 print(config)
+
+# COMMAND ----------
+
+# DBTITLE 1,Resolve time window
+def _parse_dt(value: str | None) -> dt.datetime | None:
+    if not value or not value.strip():
+        return None
+    s = value.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    parsed = dt.datetime.fromisoformat(s)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
+now = dt.datetime.now(dt.timezone.utc)
+
+begin_dt = _parse_dt(config.start_date or None)
+end_dt = _parse_dt(config.end_date or None)
+
+if begin_dt is None:
+    end_dt = now
+    begin_dt = now - dt.timedelta(hours=1)
+elif end_dt is None:
+    end_dt = now
+
+print(f"Time window: {begin_dt} → {end_dt}")
 
 # COMMAND ----------
 
