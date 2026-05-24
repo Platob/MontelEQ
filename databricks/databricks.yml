@@ -87,6 +87,7 @@ resources:
           existing_cluster_id: ${var.cluster_id}
           for_each_task:
             inputs: "{{tasks.plan.values.categories}}"
+            concurrency: 32
             task:
               task_key: ingest_category
               notebook_task:
