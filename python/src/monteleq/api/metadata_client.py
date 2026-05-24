@@ -9,6 +9,8 @@ from typing import Optional, TYPE_CHECKING, Iterable
 
 from energyquantified.metadata import CurveType, DataType
 
+from yggdrasil.io.send_config import CacheConfig, SendConfig
+
 from monteleq.model import Curve, _xxh3_id, _safe_name
 
 if TYPE_CHECKING:
@@ -52,10 +54,13 @@ class MetadataClient:
             url="metadata/curves/",
             headers={"Accept": "application/json", "Accept-Encoding": "gzip"},
             tags={"endpoint": "metadata_curves"},
+            send_config=SendConfig(
+                local_cache=CacheConfig(received_ttl=dt.timedelta(days=7)),
+            ),
         )
 
     def fetch(self) -> Response:
-        return self._base.send(self.request(), local_cache=dt.timedelta(days=7))
+        return self.request().attach_session(self._base).send()
 
     def fetch_df(self) -> pl.DataFrame:
         if self._df is None:
