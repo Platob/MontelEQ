@@ -30,14 +30,18 @@ logger = logging.getLogger(__name__)
 class Config(SystemParameters):
     end_date: dt.datetime = "now"
     seconds: int = 3600
-    table_category: str = ""
+    table_category: str = "curated_actual_period_carbon_tax"
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
-    mode: Mode = Mode.APPEND
+    mode: str = "append"
 
     @property
     def start_date(self) -> dt.datetime:
         return self.end_date - dt.timedelta(seconds=self.seconds)
+
+    @property
+    def mode_enum(self):
+        return Mode.from_(self.mode)
 
 
 config = Config().init_job()
@@ -55,7 +59,7 @@ end_dt = config.end_date
 
 issued_at_earliest = begin_dt
 
-insert_mode = config.mode.name if config.mode != Mode.APPEND else None
+insert_mode = config.mode_enum.name if config.mode_enum != Mode.APPEND else None
 
 logger.info(
     "Starting ingestion: table_category=%s begin=%s end=%s insert_mode=%s",
