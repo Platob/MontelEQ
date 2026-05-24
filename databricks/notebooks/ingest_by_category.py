@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class Config(SystemParameters):
     end_date: dt.datetime = "now"
     seconds: int = 3600
-    table_category: str = "curated_actual_period_carbon_tax"
+    table_category: str = "actual_period_carbon_tax"
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     mode: str = "append"
@@ -80,7 +80,7 @@ client = APIClient(catalog_name=config.catalog_name, schema_name=config.schema_n
 
 curves = [
     c for c in client.metadata.curves()
-    if c.table_name() == config.table_category
+    if c.table_name() == f"curated_{config.table_category}"
 ]
 if not curves:
     logger.warning("No curves found for table_category=%s", config.table_category)
