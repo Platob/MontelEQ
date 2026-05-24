@@ -26,11 +26,15 @@ class Config(SystemParameters):
     categories: str = ""
     end_date: dt.datetime = "now"
     seconds: int = 3600
-    mode: Mode = Mode.APPEND
+    mode: str = "append"
 
     @property
     def start_date(self) -> dt.datetime:
         return self.end_date - dt.timedelta(seconds=self.seconds)
+
+    @property
+    def mode_enum(self):
+        return Mode.from_(self.mode)
 
 
 config = Config().init_job()
@@ -65,7 +69,7 @@ table = client.sql.table(table_name="curated_curve_metadata").ensure_created(
 )
 table.insert(
     df,
-    mode=config.mode,
+    mode=config.mode_enum,
     match_by=["curve_id"],
     where=col("curve_id").is_in(df["curve_id"].to_list()),
 )

@@ -168,7 +168,7 @@ class CurveRequest:
         else:
             self.unit = unit
 
-        self.timezone = _effective_timezone(self.curve, self.frequency, self.timezone)
+        self.timezone = _effective_timezone(self.curve, self.frequency, timezone)
 
     # ------------------------------------------------------------------
     # PreparedRequest materialization

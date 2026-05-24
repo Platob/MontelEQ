@@ -253,7 +253,7 @@ class Curve:
             "curve_access_by": self.access.by,
             "curve_access_package": self.access.package,
             "curve_instance_issued_timezone": self.instance_issued_timezone,
-            "table_category": self.table_name(prefix="curated_"),
+            "table_category": self.table_name(),
             "updated_at": now,
         }
 

@@ -340,7 +340,7 @@ def _table_category(row: dict) -> str:
     cats = row["categories"] or []
     parts = [_safe_name(c) for c in cats[:2] if _safe_name(c)]
     cat_suffix = "_" + "_".join(parts) if parts else ""
-    return f"curated_{dt_name}_{ct_name}{cat_suffix}"
+    return f"{dt_name}_{ct_name}{cat_suffix}"
 
 
 def _compile_name_patterns(patterns: tuple[str, ...]) -> re.Pattern[str]:
