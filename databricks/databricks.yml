@@ -5,8 +5,7 @@
 #
 #       When no start_date/end_date are provided (default, scheduled every hour):
 #           `plan` resolves categories from the curve catalog.
-#           `ingest_by_category` fetches the last `period_hours`,
-#           appends to curated_* tables.
+#           `ingest_by_category` fetches the last hour, appends to curated_* tables.
 #
 #       When start_date (and optionally end_date) are provided (manual backfill):
 #           Same plan step, but `ingest_by_category` uses the explicit
@@ -38,9 +37,6 @@ variables:
   cluster_id:
     description: "Cluster for HTTP-heavy raw+curate work."
     default: 0522-063219-lfvirtho
-  period_hours:
-    description: "Lookback window in hours when no start_date is provided."
-    default: "1"
 
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
@@ -69,8 +65,6 @@ resources:
           default: ${var.catalog_name}
         - name: schema_name
           default: ${var.schema_name}
-        - name: period_hours
-          default: ${var.period_hours}
         - name: mode
           default: append
 
@@ -101,7 +95,6 @@ resources:
                   end_date: "{{job.parameters.end_date}}"
                   catalog_name: "{{job.parameters.catalog_name}}"
                   schema_name: "{{job.parameters.schema_name}}"
-                  period_hours: "{{job.parameters.period_hours}}"
                   mode: "{{job.parameters.mode}}"
 
 targets:

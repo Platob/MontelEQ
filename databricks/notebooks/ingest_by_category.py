@@ -6,7 +6,7 @@
 # MAGIC Called as a downstream task from the plan task.
 # MAGIC
 # MAGIC * When no `start_date`/`end_date` are provided (default, scheduled) —
-# MAGIC   uses `period_hours` as a lookback window from now.  Incremental append.
+# MAGIC   uses a 1-hour lookback window from now.  Incremental append.
 # MAGIC * When `start_date` (and optionally `end_date`) are provided (manual backfill) —
 # MAGIC   uses the explicit datetime range.  `mode` can be set to `overwrite`
 # MAGIC   to replace curated data for the window.
@@ -33,7 +33,6 @@ class Config(SystemParameters):
     table_category: str = ""
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
-    period_hours: int = 1
     mode: Mode = Mode.APPEND
 
 
@@ -68,7 +67,7 @@ latest = begin_dt is None
 
 if latest:
     end_dt = now
-    begin_dt = now - dt.timedelta(hours=config.period_hours)
+    begin_dt = now - dt.timedelta(hours=1)
 elif end_dt is None:
     end_dt = now
 
