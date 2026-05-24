@@ -235,6 +235,28 @@ class Curve:
         if self.id == 0 and self.name:
             object.__setattr__(self, "id", _xxh3_id(self.name))
 
+    def to_metadata_row(self, *, now: dt.datetime) -> dict:
+        return {
+            "curve_id": self.id,
+            "curve_name": self.name,
+            "curve_type": self.curve_type.name,
+            "curve_data_type": self.data_type.name,
+            "curve_area": self.area,
+            "curve_area_sink": self.area_sink,
+            "curve_commodity": self.commodity,
+            "curve_source": self.source,
+            "curve_unit": self.unit,
+            "curve_denominator": self.denominator,
+            "curve_categories": list(self.categories),
+            "curve_resolution_frequency": self.resolution.frequency,
+            "curve_resolution_timezone": self.resolution.timezone,
+            "curve_access_by": self.access.by,
+            "curve_access_package": self.access.package,
+            "curve_instance_issued_timezone": self.instance_issued_timezone,
+            "table_category": self.table_name(prefix="curated_"),
+            "updated_at": now,
+        }
+
     def table_name(self, prefix: str = "") -> str:
         key = (self.data_type.name, self.curve_type.name, self.categories[:2], prefix)
         cached = _TABLE_NAME_CACHE.get(key)
