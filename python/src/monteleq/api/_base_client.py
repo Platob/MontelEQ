@@ -40,18 +40,18 @@ class BaseClient(HTTPSession):
         headers: Headers = None,
         waiting: WaitingConfig | None = None,
         auth: Authorization | None = None,
+        **kwargs,
     ) -> None:
-        kw: dict = {}
         if waiting is not None:
-            kw["waiting"] = waiting
+            kwargs["waiting"] = waiting
         if auth is not None:
-            kw["auth"] = auth
+            kwargs["auth"] = auth
         super().__init__(
             base_url=base_url or URL.from_str("https://app.energyquantified.com/api/"),
             verify=verify,
             pool_maxsize=pool_maxsize,
             headers=headers,
-            **kw,
+            **kwargs,
         )
         self.catalog_name = catalog_name or "trading_tgp_dev"
         self.schema_name = schema_name or "src_monteleq"

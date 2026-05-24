@@ -212,17 +212,24 @@ class CurveRequest:
         )
         url = (base_url / self._url_path()).with_query_items(self.parameters())
 
-        request = PreparedRequest(
-            method="GET",
-            url=url,
-            headers=dict(REQUEST_HEADERS),
-            tags=self._merged_tags(),
-            buffer=None,
-            sent_at=None,
-            send_config=self._send_config(),
-        )
         if self.client is not None:
+            request = self.client.prepare_request(
+                method="GET",
+                url=url,
+                headers=dict(REQUEST_HEADERS),
+                tags=self._merged_tags(),
+                send_config=self._send_config(),
+            )
             request.attach_session(self.client)
+        else:
+            request = PreparedRequest(
+                method="GET",
+                url=url,
+                headers=dict(REQUEST_HEADERS),
+                tags=self._merged_tags(),
+                buffer=None,
+                sent_at=None,
+            )
         return request
 
     @classmethod
