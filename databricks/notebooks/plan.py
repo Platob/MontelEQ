@@ -3,7 +3,7 @@
 # MAGIC # MontelEQ — Plan
 # MAGIC
 # MAGIC Fetches the curve catalog, upserts the `curated_curve_metadata`
-# MAGIC referential, resolves categories, and outputs them
+# MAGIC referential, resolves table categories, and outputs them
 # MAGIC for downstream `ingest_by_category` tasks.
 
 # COMMAND ----------
@@ -23,7 +23,7 @@ from yggdrasil.environ.parameters import SystemParameters
 class Config(SystemParameters):
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
-    categories: str = ""
+    table_category: str = ""
     end_date: dt.datetime = "now"
     seconds: int = 3600
     mode: str = "append"
@@ -81,11 +81,11 @@ print(f"Upserted {df.height} curves into curated_curve_metadata")
 # DBTITLE 1,Resolve table categories
 table_categories = sorted(df["table_category"].unique().to_list())
 
-if config.categories:
-    requested = [c.strip() for c in config.categories.split(",") if c.strip()]
+if config.table_category:
+    requested = [c.strip() for c in config.table_category.split(",") if c.strip()]
     unknown = set(requested) - set(table_categories)
     if unknown:
-        raise ValueError(f"Unknown categories: {sorted(unknown)}")
+        raise ValueError(f"Unknown table categories: {sorted(unknown)}")
     table_categories = [c for c in table_categories if c in requested]
 
 print(f"Resolved {len(table_categories)} table categories: {table_categories}")
