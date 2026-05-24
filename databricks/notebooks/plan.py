@@ -79,10 +79,7 @@ print(f"Upserted {df.height} curves into curated_curve_metadata")
 # COMMAND ----------
 
 # DBTITLE 1,Resolve table categories
-table_categories = sorted(
-    tc.removeprefix("curated_")
-    for tc in df["table_category"].unique().to_list()
-)
+table_categories = sorted(df["table_category"].unique().to_list())
 
 if config.categories:
     requested = [c.strip() for c in config.categories.split(",") if c.strip()]

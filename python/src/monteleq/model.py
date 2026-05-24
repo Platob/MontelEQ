@@ -257,7 +257,7 @@ class Curve:
             "updated_at": now,
         }
 
-    def table_name(self, prefix: str = "curated_") -> str:
+    def table_name(self, prefix: str = "") -> str:
         key = (self.data_type.name, self.curve_type.name, self.categories[:2], prefix)
         cached = _TABLE_NAME_CACHE.get(key)
         if cached is not None:

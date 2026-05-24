@@ -80,7 +80,7 @@ client = APIClient(catalog_name=config.catalog_name, schema_name=config.schema_n
 
 curves = [
     c for c in client.metadata.curves()
-    if c.table_name() == f"curated_{config.table_category}"
+    if c.table_name() == config.table_category
 ]
 if not curves:
     logger.warning("No curves found for table_category=%s", config.table_category)

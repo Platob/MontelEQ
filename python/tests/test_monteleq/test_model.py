@@ -330,7 +330,7 @@ class TestCurve:
             data_type=DataType.NORMAL,
         )
         tn = c.table_name()
-        assert tn == "curated_normal_ohlc"
+        assert tn == "normal_ohlc"
 
     def test_table_name_categories_capped_at_two(self):
         c = Curve(
