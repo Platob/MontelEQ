@@ -571,6 +571,14 @@ def _struct_fields(dtype: pl.Struct) -> dict[str, pl.DataType]:
     return result
 
 
+def _column_type_sig(dtype: pl.DataType) -> tuple:
+    if isinstance(dtype, pl.Struct):
+        return tuple(sorted(_struct_fields(dtype).keys()))
+    if isinstance(dtype, pl.List) and isinstance(dtype.inner, pl.Struct):
+        return ("list", tuple(sorted(_struct_fields(dtype.inner).keys())))
+    return (str(dtype),)
+
+
 _reorder_expr_cache: dict[tuple, list[pl.Expr]] = {}
 
 
@@ -581,7 +589,7 @@ def reorder_columns(
 ) -> pl.DataFrame:
     actual_columns = frozenset(df.columns)
     actual_struct_sig = tuple(
-        (col, tuple(sorted(_struct_fields(df.schema[col]).keys())))
+        (col, _column_type_sig(df.schema[col]))
         for col in df.columns
         if col in df.schema and isinstance(df.schema[col], (pl.Struct, pl.List))
     )
