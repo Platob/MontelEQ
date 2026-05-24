@@ -68,12 +68,12 @@ print(f"Upserted {len(curves)} curves into curated_curve_metadata")
 
 # COMMAND ----------
 
-# DBTITLE 1,Resolve categories
-categories = sorted({c.categories[0] for c in curves if c.categories})
+# DBTITLE 1,Resolve table categories
+table_categories = sorted({c.table_name(prefix="curated_") for c in curves})
 
-print(f"Resolved {len(categories)} categories: {categories}")
+print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 
 # COMMAND ----------
 
 # DBTITLE 1,Output for downstream tasks
-dbutils.notebook.exit(json.dumps(categories))  # noqa: F821
+dbutils.notebook.exit(json.dumps(table_categories))  # noqa: F821
