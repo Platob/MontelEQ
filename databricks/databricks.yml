@@ -4,7 +4,7 @@
 #       plan → ingest_by_category (per-category fan-out)
 #
 #       By default (scheduled every hour):
-#           `plan` resolves categories and pins end_date=now, seconds=3600.
+#           `plan` resolves table categories and pins end_date=now, seconds=3600.
 #           `ingest_by_category` fetches that window, appends to curated_* tables.
 #
 #       Manual backfill:
@@ -19,10 +19,10 @@
 #       --params mode=overwrite \
 #       --profile monteleq-prd
 #
-#   Relaunch specific categories only:
+#   Relaunch specific table categories only:
 #
 #   databricks bundle run -t prd monteleq_ingestion \
-#       --params categories=curated_actual_timeseries_power,curated_forecast_instance_wind
+#       --params table_category=curated_actual_timeseries_power,curated_forecast_instance_wind
 
 bundle:
   name: monteleq
@@ -59,7 +59,7 @@ resources:
           default: "now"
         - name: seconds
           default: "3600"
-        - name: categories
+        - name: table_category
           default: ""
         - name: catalog_name
           default: ${var.catalog_name}
@@ -76,7 +76,7 @@ resources:
             base_parameters:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
-              categories: "{{job.parameters.categories}}"
+              table_category: "{{job.parameters.table_category}}"
               end_date: "{{job.parameters.end_date}}"
               seconds: "{{job.parameters.seconds}}"
               mode: "{{job.parameters.mode}}"
