@@ -65,7 +65,7 @@ class MetadataClient:
         )
 
     def fetch(self) -> Response:
-        return self.request().attach_session(self._base).send()
+        return self.request().send()
 
     def fetch_df(self) -> pl.DataFrame:
         if self._df is None:

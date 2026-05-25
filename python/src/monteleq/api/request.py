@@ -202,7 +202,9 @@ class CurveRequest:
             self.event_type == EventType.CURVE_UPDATE
             or (self.end > now if self.end else False)
         )
-        return self.client.send_config(curve=self.curve, upsert=upsert)
+        return self.client.send_config(
+            curve=self.curve, upsert=upsert
+        )
 
     def to_request(self) -> PreparedRequest:
         base_url = (
@@ -233,7 +235,10 @@ class CurveRequest:
         return request
 
     @classmethod
-    def deduplicate(cls, requests: Iterable["CurveRequest"]) -> Iterator[PreparedRequest]:
+    def deduplicate(
+        cls,
+        requests: Iterable["CurveRequest"],
+    ) -> Iterator[PreparedRequest]:
         keys: set[int] = set()
         for request in requests:
             if not isinstance(request, PreparedRequest):

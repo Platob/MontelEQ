@@ -63,7 +63,7 @@ class BaseClient(HTTPSession):
     def _auto_init(self) -> None:
         if PyEnv.in_databricks():
             self._databricks = DatabricksClient.current()
-        elif self._databricks is None and not self.x_api_key:
+        elif self._databricks is None and not self.headers.get("X-API-Key"):
             host = (
                 "https://dbc-82edd6f4-1e97.cloud.databricks.com"
                 if self.catalog_name and self.catalog_name.endswith("_prd")
@@ -74,9 +74,9 @@ class BaseClient(HTTPSession):
         if not self.mode:
             self.mode = "databricks+api"
 
-        if not self.x_api_key:
+        if not self.headers.get("X-API-Key"):
             try:
-                self.x_api_key = self.databricks.secrets["monteleq"]["api_key"].svalue()
+                self.headers["X-API-Key"] = self.databricks.secrets["monteleq"]["api_key"].svalue()
                 self.mode = "databricks+api"
             except Exception:
                 self.mode = "databricks"

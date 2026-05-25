@@ -18,6 +18,11 @@ class TestClient(TestCase):
             mode="databricks",
         )
 
+    def test_metadata(self):
+        curves = self.client.metadata.curves()
+
+        assert isinstance(curves, list)
+
     def test_events(self):
         for df in self.client.curate_curves(
             self.client.events.requests(
