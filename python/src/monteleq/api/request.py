@@ -202,9 +202,13 @@ class CurveRequest:
             self.event_type == EventType.CURVE_UPDATE
             or (self.end > now if self.end else False)
         )
-        return self.client.send_config(
+        config = self.client.send_config(
             curve=self.curve, upsert=upsert
         )
+        if not self.raise_error:
+            import dataclasses
+            config = dataclasses.replace(config, raise_error=False)
+        return config
 
     def to_request(self) -> PreparedRequest:
         base_url = (

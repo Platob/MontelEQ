@@ -209,20 +209,34 @@ class APIClient(BaseClient):
         spark: "SparkSession | bool | None" = None,
         batch_size: int | None = None,
     ) -> Iterator[Any]:
+        import dataclasses
+
         spark_session = self._resolve_spark(spark)
-        yield from self.send_many_batches(
-            CurveRequest.http_requests(
-                requests,
-                client=self,
-                begin=begin,
-                end=end,
-                issued_at_earliest=issued_at_earliest,
-                issued_at_latest=issued_at_latest,
-                raise_error=raise_error,
-            ),
-            batch_size=batch_size,
-            spark_session=spark_session,
+        http_requests = CurveRequest.http_requests(
+            requests,
+            client=self,
+            begin=begin,
+            end=end,
+            issued_at_earliest=issued_at_earliest,
+            issued_at_latest=issued_at_latest,
             raise_error=raise_error,
+        )
+
+        def _stamp(reqs):
+            for r in reqs:
+                cfg = r.send_config_or_default
+                overrides = {}
+                if cfg.spark_session is not spark_session:
+                    overrides["spark_session"] = spark_session
+                if cfg.raise_error != raise_error:
+                    overrides["raise_error"] = raise_error
+                if overrides:
+                    r.send_config = dataclasses.replace(cfg, **overrides)
+                yield r
+
+        yield from self.send_many_batches(
+            _stamp(http_requests),
+            batch_size=batch_size,
         )
 
     # ------------------------------------------------------------------
