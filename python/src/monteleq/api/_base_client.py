@@ -65,9 +65,9 @@ class BaseClient(HTTPSession):
             self._databricks = DatabricksClient.current()
         elif self._databricks is None and not self.headers.get("X-API-Key"):
             host = (
-                "https://dbc-82edd6f4-1e97.cloud.databricks.com"
+                "https://dbc-82edd6f4-1e97.cloud.databricks.com/"
                 if self.catalog_name and self.catalog_name.endswith("_prd")
-                else "https://dbc-0150e9a2-ae64.cloud.databricks.com"
+                else "https://dbc-0150e9a2-ae64.cloud.databricks.com/"
             )
             self._databricks = DatabricksClient(host=host)
 

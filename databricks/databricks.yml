@@ -36,7 +36,7 @@ variables:
     default: src_monteleq
   cluster_id:
     description: "Cluster for HTTP-heavy raw+curate work."
-    default: 0522-063219-lfvirtho
+    default: 0525-144942-xjlhyl98
 
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
@@ -106,12 +106,12 @@ targets:
     default: true
     variables:
       catalog_name: trading_tgp_dev
-      cluster_id: 0522-063219-lfvirtho
+      cluster_id: 0525-144942-xjlhyl98
 
   prod:
     mode: production
     variables:
       catalog_name: trading_tgp_prd
-      cluster_id: 0522-063219-lfvirtho
+      cluster_id: 0525-144942-xjlhyl98
     run_as:
       service_principal_name: monteleq-service-principal
