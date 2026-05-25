@@ -20,6 +20,7 @@ from yggdrasil.data.cast import any_to_datetime, truncate_datetime
 from yggdrasil.data.enums import Mode
 from yggdrasil.execution.expr.builder import col as expr_col
 from yggdrasil.io import URL
+from yggdrasil.io.response import Response
 
 from monteleq.api._base_client import BaseClient
 from monteleq.api.curation_client import CurationClient
@@ -208,7 +209,6 @@ class APIClient(BaseClient):
         spark: "SparkSession | bool | None" = None,
         batch_size: int | None = None,
     ) -> Iterator[Any]:
-        spark_session = self._resolve_spark(spark)
         yield from self.send_many_batches(
             CurveRequest.http_requests(
                 requests,
@@ -219,8 +219,6 @@ class APIClient(BaseClient):
                 issued_at_latest=issued_at_latest,
                 raise_error=raise_error,
             ),
-            raise_error=raise_error,
-            spark_session=spark_session,
             batch_size=batch_size,
         )
 
@@ -331,11 +329,11 @@ class APIClient(BaseClient):
         insert_mode: Mode = Mode.APPEND,
     ) -> Iterator[Any]:
         if insert_all:
-            base = batch.to_dataframe()
-        elif batch.new_hits is None:
+            base = batch.read_spark_frame()
+        elif batch.new is None:
             return
         else:
-            base = batch.new_hits.to_spark_frame()
+            base = batch.new.read_spark_frame()
 
         curated = self.curate_responses_spark(base).cache()
         curated.count()
@@ -389,8 +387,10 @@ class APIClient(BaseClient):
     ) -> Iterator[polars.DataFrame]:
         if insert_all:
             responses = batch.iter_responses()
+        elif batch.new is None:
+            return
         else:
-            responses = batch.new_responses()
+            responses = Response.from_records(batch.new.read_records())
 
         curated_parts: list[polars.DataFrame] = []
         for response in responses:
