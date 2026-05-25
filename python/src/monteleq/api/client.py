@@ -20,7 +20,6 @@ from yggdrasil.data.cast import any_to_datetime, truncate_datetime
 from yggdrasil.data.enums import Mode
 from yggdrasil.execution.expr.builder import col as expr_col
 from yggdrasil.io import URL
-from yggdrasil.io.response import Response
 
 from monteleq.api._base_client import BaseClient
 from monteleq.api.curation_client import CurationClient
@@ -209,6 +208,7 @@ class APIClient(BaseClient):
         spark: "SparkSession | bool | None" = None,
         batch_size: int | None = None,
     ) -> Iterator[Any]:
+        spark_session = self._resolve_spark(spark)
         yield from self.send_many_batches(
             CurveRequest.http_requests(
                 requests,
@@ -220,6 +220,8 @@ class APIClient(BaseClient):
                 raise_error=raise_error,
             ),
             batch_size=batch_size,
+            spark_session=spark_session,
+            raise_error=raise_error,
         )
 
     # ------------------------------------------------------------------
@@ -329,11 +331,11 @@ class APIClient(BaseClient):
         insert_mode: Mode = Mode.APPEND,
     ) -> Iterator[Any]:
         if insert_all:
-            base = batch.read_spark_frame()
-        elif batch.new is None:
+            base = batch.to_dataframe()
+        elif batch.new_hits is None:
             return
         else:
-            base = batch.new.read_spark_frame()
+            base = batch.new_hits.read_spark_frame()
 
         curated = self.curate_responses_spark(base).cache()
         curated.count()
@@ -387,10 +389,10 @@ class APIClient(BaseClient):
     ) -> Iterator[polars.DataFrame]:
         if insert_all:
             responses = batch.iter_responses()
-        elif batch.new is None:
+        elif batch.new_hits is None:
             return
         else:
-            responses = Response.from_records(batch.new.read_records())
+            responses = batch.new_responses()
 
         curated_parts: list[polars.DataFrame] = []
         for response in responses:
@@ -474,8 +476,9 @@ class APIClient(BaseClient):
         """Curate a Spark DataFrame whose rows match ``RESPONSE_SCHEMA``."""
         spark_curated_schema = CURATED_DATA_SCHEMA.to_spark_schema()
 
-        ser_client = self
-        cm = self.metadata.curvemap
+        spark = df.sparkSession
+        bc_client = spark.sparkContext.broadcast(self)
+        bc_curvemap = spark.sparkContext.broadcast(self.metadata.curvemap)
 
         def _curate_partition(
             batches: Iterable[pa.RecordBatch],
@@ -483,8 +486,9 @@ class APIClient(BaseClient):
             from yggdrasil.io.response import Response
             from monteleq.api.schemas import CURATED_DATA_SCHEMA
 
-            ser_client.metadata._curves = cm
-            curation = ser_client.curation
+            client = bc_client.value
+            client.metadata._curves = bc_curvemap.value
+            curation = client.curation
 
             for batch in batches:
                 for resp in Response.from_arrow_tabular(batch, normalize=False):
