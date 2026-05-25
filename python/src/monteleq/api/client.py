@@ -352,8 +352,12 @@ class APIClient(BaseClient):
         else:
             base = batch.new.read_spark_frame()
 
-        curated = self.curate_responses_spark(base).cache()
-        curated.count()
+        try:
+            curated = self.curate_responses_spark(base).cache()
+            curated.count()
+        except Exception:
+            logger.exception("Spark curation failed for batch")
+            return
 
         curve_names = [
             _["curve_name"]
@@ -413,7 +417,11 @@ class APIClient(BaseClient):
         for response in responses:
             if not response.ok:
                 continue
-            df = self.curation.curate(response)
+            try:
+                df = self.curation.curate(response)
+            except Exception:
+                logger.exception("Curation failed for response %s", response)
+                continue
             if df.height == 0:
                 continue
             curated_parts.append(df)
