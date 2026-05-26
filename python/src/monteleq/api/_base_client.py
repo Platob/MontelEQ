@@ -15,7 +15,7 @@ from yggdrasil.environ import PyEnv
 from yggdrasil.http_ import HTTPSession
 from yggdrasil.http_.session import Authorization, WaitingConfig
 from yggdrasil.io import URL
-from yggdrasil.io.send_config import CacheConfig, SendConfig
+from yggdrasil.http_.send_config import CacheConfig, SendConfig
 
 from monteleq.model import Curve
 

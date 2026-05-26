@@ -12,6 +12,7 @@ import time
 from typing import Iterable, Any, Iterator, TYPE_CHECKING
 
 import polars
+from yggdrasil.http_.send_config import SendConfig
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession, DataFrame as SparkDataFrame
@@ -224,14 +225,14 @@ class APIClient(BaseClient):
 
         def _stamp(reqs):
             for r in reqs:
-                cfg = r.send_config_or_default
+                cfg: SendConfig = r.send_config_or_default
                 overrides = {}
                 if cfg.spark_session is not spark_session:
                     overrides["spark_session"] = spark_session
                 if cfg.raise_error != raise_error:
                     overrides["raise_error"] = raise_error
                 if overrides:
-                    r.send_config = dataclasses.replace(cfg, **overrides)
+                    r.send_config = cfg.copy(**overrides)
                 yield r
 
         yield from self.send_many_batches(

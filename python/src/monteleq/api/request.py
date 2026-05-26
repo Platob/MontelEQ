@@ -12,7 +12,7 @@ from yggdrasil.io.request import PreparedRequest
 from monteleq.model import Curve, DEFAULT_ISSUE_INTERVAL
 
 if TYPE_CHECKING:
-    from yggdrasil.io.send_config import SendConfig
+    from yggdrasil.http_.send_config import SendConfig
     from .client import APIClient
 
 __all__ = [
@@ -206,8 +206,7 @@ class CurveRequest:
             curve=self.curve, upsert=upsert
         )
         if not self.raise_error:
-            import dataclasses
-            config = dataclasses.replace(config, raise_error=False)
+            config = config.copy(raise_error=False)
         return config
 
     def to_request(self) -> PreparedRequest:

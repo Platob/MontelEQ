@@ -9,7 +9,7 @@ from typing import Optional, TYPE_CHECKING, Iterable
 
 from energyquantified.metadata import CurveType, DataType
 
-from yggdrasil.io.send_config import CacheConfig, SendConfig
+from yggdrasil.http_.send_config import CacheConfig, SendConfig
 
 from monteleq.model import Curve, _xxh3_id, _safe_name
 
