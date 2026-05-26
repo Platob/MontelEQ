@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 from unittest import TestCase
 
 from energyquantified.metadata import CurveType
@@ -15,7 +16,6 @@ class TestClient(TestCase):
     def setUpClass(cls):
         cls.client = APIClient(
             catalog_name="trading_tgp_prd",
-            mode="databricks",
         )
 
     def test_metadata(self):
@@ -27,18 +27,61 @@ class TestClient(TestCase):
         for df in self.client.curate_curves(
             self.client.events.requests(
                 batch_size=100,
-            ), raise_error=False
+            ), raise_error=False,
         ):
             print(df)
 
-    def test_instance(self):
-        for response in self.client.curate_curves(
-            "*Solar*Photovoltaic*",
-            issued_at_earliest=datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(days=1),
-            begin="2026-01-01",
-            raise_error=False
+    @staticmethod
+    def _make_logger(category):
+        logger = logging.getLogger(f"test_instance.{category}")
+        handler = logging.FileHandler(f"{category}.log", mode="w")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        return logger, handler
+
+    @staticmethod
+    def _curve_names(client, category):
+        return client.metadata.metadata_df().sql(
+            f"select * from self where table_category = '{category}'"
+        )["curve_name"].unique().to_list()
+
+    @staticmethod
+    def _curate_one(client, name, logger):
+        logger.info("curating %s", name)
+        for response in client.curate_curves(
+            [name],
+            issued_at_earliest="2019-01-01",
+            issued_at_latest="2025-05-01",
+            begin="2019-01-01",
+            end="2025-05-01",
+            raise_error=False,
         ):
             assert response is not None
+            logger.info("ok: %s", response)
+
+    def _run_category(self, category):
+        logger, handler = self._make_logger(category)
+        try:
+            names = self._curve_names(self.client, category)
+            logger.info("resolved %d curves for %s", len(names), category)
+            for name in names:
+                self._curate_one(self.client, name, logger)
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+
+    def test_instance_forecast_solar_photovoltaic(self):
+        self._run_category("forecast_instance_solar_photovoltaic")
+
+    def test_instance_forecast_wind_power(self):
+        self._run_category("forecast_instance_wind_power")
+
+    def test_instance_forecast_residual_load(self):
+        self._run_category("forecast_instance_residual_load")
+
+    def test_instance_forecast_hydro_run_of_river(self):
+        self._run_category("forecast_instance_hydro_run_of_river")
 
     def test_period_instance(self):
         for response in self.client.fetch_curves(

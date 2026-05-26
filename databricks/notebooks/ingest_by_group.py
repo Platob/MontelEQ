@@ -21,7 +21,7 @@ import logging
 
 sys.path.insert(0, "/Workspace/Shared/MontelEQ/python/src")
 
-from yggdrasil.data.enums import Mode
+from yggdrasil.enums import Mode
 from yggdrasil.environ.parameters import SystemParameters
 
 logger = logging.getLogger(__name__)

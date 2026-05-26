@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession, DataFrame as SparkDataFrame
 import pyarrow as pa
 from yggdrasil.data.cast import any_to_datetime, truncate_datetime
-from yggdrasil.data.enums import Mode
+from yggdrasil.enums import Mode
 from yggdrasil.execution.expr.builder import col as expr_col
 from yggdrasil.io import URL
 from yggdrasil.io.response import Response

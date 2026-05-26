@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 import polars as pl
 import xxhash
 from yggdrasil.data.cast import any_to_datetime
-from yggdrasil.data.enums.timezone import Timezone
+from yggdrasil.enums.timezone import Timezone
 from yggdrasil.http_ import HTTPResponse
 
 from monteleq.api.curation_helpers import (

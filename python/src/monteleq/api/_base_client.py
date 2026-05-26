@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from yggdrasil.databricks.sql.engine import SQLEngine
 
 from energyquantified import EnergyQuantified
-from yggdrasil.data.enums import Mode
+from yggdrasil.enums import Mode
 from yggdrasil.databricks import DatabricksClient
 from yggdrasil.databricks.table import Table
 from yggdrasil.environ import PyEnv
