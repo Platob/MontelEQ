@@ -1,11 +1,16 @@
 # Databricks Asset Bundle for the MontelEQ pipeline. Single unified job:
 #
 #   monteleq_ingestion
-#       plan → ingest_by_category (per-category fan-out)
+#       plan → ingest_by_group (per data_type×curve_type fan-out)
+#
+#       Each (data_type, curve_type) group runs on its own dedicated cluster,
+#       distributing the ingestion load across multiple compute resources.
 #
 #       By default (scheduled every hour):
-#           `plan` resolves table categories and pins end_date=now, seconds=3600.
-#           `ingest_by_category` fetches that window, appends to curated_* tables.
+#           `plan` resolves table categories, groups them by (data_type, curve_type),
+#           and pins end_date=now, seconds=3600.
+#           `ingest_by_group` fetches that window on a per-group cluster,
+#           then appends to the relevant curated_* tables.
 #
 #       Manual backfill:
 #           Set `end_date` and `seconds` to cover the desired window.
@@ -35,8 +40,14 @@ variables:
     description: "Schema within the catalog."
     default: src_monteleq
   cluster_id:
-    description: "Cluster for HTTP-heavy raw+curate work."
+    description: "Cluster for the plan task."
     default: 0525-144942-xjlhyl98
+  ingestion_spark_version:
+    description: "Databricks Runtime for per-group ingestion clusters."
+    default: "15.4.x-scala2.12"
+  ingestion_node_type_id:
+    description: "Instance type for per-group ingestion clusters."
+    default: "m5.xlarge"
 
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
@@ -81,19 +92,28 @@ resources:
               seconds: "{{job.parameters.seconds}}"
               mode: "{{job.parameters.mode}}"
 
-        - task_key: ingest_by_category
+        - task_key: ingest_by_group
           depends_on:
             - task_key: plan
-          existing_cluster_id: ${var.cluster_id}
           for_each_task:
-            inputs: "{{tasks.plan.values.categories}}"
-            concurrency: 32
+            inputs: "{{tasks.plan.values.groups}}"
+            concurrency: 10
             task:
-              task_key: ingest_category
+              task_key: ingest_group
+              new_cluster:
+                spark_version: ${var.ingestion_spark_version}
+                node_type_id: ${var.ingestion_node_type_id}
+                num_workers: 2
+              libraries:
+                - pypi:
+                    package: "ygg[databricks]==0.8.*"
+                - pypi:
+                    package: "energyquantified"
               notebook_task:
-                notebook_path: ./notebooks/ingest_by_category.py
+                notebook_path: ./notebooks/ingest_by_group.py
                 base_parameters:
-                  table_category: "{{input.table_category}}"
+                  cluster_key: "{{input.cluster_key}}"
+                  table_categories: "{{input.table_categories}}"
                   end_date: "{{input.end_date}}"
                   seconds: "{{input.seconds}}"
                   catalog_name: "{{job.parameters.catalog_name}}"

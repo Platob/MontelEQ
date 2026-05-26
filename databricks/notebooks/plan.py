@@ -92,17 +92,44 @@ print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 
 # COMMAND ----------
 
+# DBTITLE 1,Group categories by (data_type, curve_type)
+from monteleq.model import _safe_name
+
+cluster_key_map = {}
+for row in (
+    df.select("table_category", "curve_data_type", "curve_type")
+    .unique(subset=["table_category"])
+    .iter_rows(named=True)
+):
+    ck = (
+        f"{_safe_name(row['curve_data_type'] or '')}_{_safe_name(row['curve_type'] or '')}"
+    )
+    cluster_key_map[row["table_category"]] = ck
+
+groups: dict[str, list[str]] = {}
+for cat in table_categories:
+    ck = cluster_key_map.get(cat, "unknown")
+    groups.setdefault(ck, []).append(cat)
+
+print(
+    f"Grouped {len(table_categories)} categories into "
+    f"{len(groups)} cluster groups: {sorted(groups.keys())}"
+)
+
+# COMMAND ----------
+
 # DBTITLE 1,Output for downstream tasks
 end_date_iso = end_dt.isoformat()
 
 output = [
     {
-        "table_category": c,
+        "cluster_key": ck,
+        "table_categories": ",".join(cats),
         "end_date": end_date_iso,
         "seconds": str(config.seconds),
     }
-    for c in table_categories
+    for ck, cats in sorted(groups.items())
 ]
 
-dbutils.jobs.taskValues.set(key="categories", value=output)  # noqa: F821
+dbutils.jobs.taskValues.set(key="groups", value=output)  # noqa: F821
 dbutils.notebook.exit(json.dumps(output))  # noqa: F821
