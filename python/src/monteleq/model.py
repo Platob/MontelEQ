@@ -257,6 +257,11 @@ class Curve:
             "updated_at": now,
         }
 
+    def cluster_key(self) -> str:
+        data_type = _safe_name(self.data_type.name) or "none"
+        curve_type = _safe_name(self.curve_type.name) or "none"
+        return f"{data_type}_{curve_type}"
+
     def table_name(self, prefix: str = "") -> str:
         key = (self.data_type.name, self.curve_type.name, self.categories[:2], prefix)
         cached = _TABLE_NAME_CACHE.get(key)

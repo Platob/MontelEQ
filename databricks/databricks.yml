@@ -1,11 +1,19 @@
-# Databricks Asset Bundle for the MontelEQ pipeline. Single unified job:
+# Databricks Asset Bundle for the MontelEQ pipeline.
 #
 #   monteleq_ingestion
-#       plan → ingest_by_category (per-category fan-out)
+#       plan (self-contained orchestrator)
+#
+#       The plan task:
+#         1. Refreshes curve metadata referential
+#         2. Generates pending_requests rows for each curve×window
+#         3. Groups table categories by (data_type, curve_type)
+#         4. Gets or creates a dedicated cluster per group
+#         5. Dispatches per-category ingest jobs on the group cluster
 #
 #       By default (scheduled every hour):
-#           `plan` resolves table categories and pins end_date=now, seconds=3600.
-#           `ingest_by_category` fetches that window, appends to curated_* tables.
+#           plan pins end_date=now, seconds=3600.
+#           Each (data_type, curve_type) group runs on its own cluster.
+#           ingest_by_category runs once per table_category.
 #
 #       Manual backfill:
 #           Set `end_date` and `seconds` to cover the desired window.
@@ -35,7 +43,7 @@ variables:
     description: "Schema within the catalog."
     default: src_monteleq
   cluster_id:
-    description: "Cluster for HTTP-heavy raw+curate work."
+    description: "Cluster for the plan orchestrator."
     default: 0525-144942-xjlhyl98
 
 workspace:
@@ -80,25 +88,6 @@ resources:
               end_date: "{{job.parameters.end_date}}"
               seconds: "{{job.parameters.seconds}}"
               mode: "{{job.parameters.mode}}"
-
-        - task_key: ingest_by_category
-          depends_on:
-            - task_key: plan
-          existing_cluster_id: ${var.cluster_id}
-          for_each_task:
-            inputs: "{{tasks.plan.values.categories}}"
-            concurrency: 32
-            task:
-              task_key: ingest_category
-              notebook_task:
-                notebook_path: ./notebooks/ingest_by_category.py
-                base_parameters:
-                  table_category: "{{input.table_category}}"
-                  end_date: "{{input.end_date}}"
-                  seconds: "{{input.seconds}}"
-                  catalog_name: "{{job.parameters.catalog_name}}"
-                  schema_name: "{{job.parameters.schema_name}}"
-                  mode: "{{job.parameters.mode}}"
 
 targets:
   dev:

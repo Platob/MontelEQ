@@ -313,6 +313,37 @@ class TestCurve:
         c = Curve(id=42, name="test")
         assert c.id == 42
 
+    def test_cluster_key_basic(self):
+        c = Curve(
+            name="test",
+            curve_type=CurveType.TIMESERIES,
+            data_type=DataType.ACTUAL,
+        )
+        assert c.cluster_key() == "actual_timeseries"
+
+    def test_cluster_key_instance_period(self):
+        c = Curve(
+            name="test",
+            curve_type=CurveType.INSTANCE_PERIOD,
+            data_type=DataType.REMIT,
+        )
+        assert c.cluster_key() == "remit_instance_period"
+
+    def test_cluster_key_ignores_categories(self):
+        c1 = Curve(
+            name="a", curve_type=CurveType.TIMESERIES,
+            data_type=DataType.ACTUAL, categories=("Power",),
+        )
+        c2 = Curve(
+            name="b", curve_type=CurveType.TIMESERIES,
+            data_type=DataType.ACTUAL, categories=("Wind", "Onshore"),
+        )
+        assert c1.cluster_key() == c2.cluster_key()
+
+    def test_cluster_key_defaults(self):
+        c = Curve(name="test")
+        assert c.cluster_key() == "normal_timeseries"
+
     def test_table_name_with_prefix(self):
         c = Curve(
             name="test",
