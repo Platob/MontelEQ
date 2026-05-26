@@ -34,6 +34,8 @@ class Config(SystemParameters):
     end_date: dt.datetime = "now"
     seconds: int = 3600
     mode: str = "append"
+    events: bool = False
+    events_checkpoint: str = "/dbfs/tmp/monteleq/plan-events-checkpoint.json"
     notebook_root: str = "/Workspace/Shared/MontelEQ/databricks/notebooks"
 
     @property
@@ -101,50 +103,84 @@ print(f"Resolved {len(table_categories)} table categories: {table_categories}")
 
 # COMMAND ----------
 
-# DBTITLE 1,Generate pending requests
+# DBTITLE 1,Resolve target curves (events vs full scan)
 from energyquantified.metadata import CurveType
-from monteleq.api.request import CurveRequest
 from monteleq.api.schemas import PENDING_REQUESTS_SCHEMA
 from monteleq.model import _safe_name
 
+curvemap = client.metadata.curvemap
+category_set = set(table_categories)
+
+if config.events:
+    target_curves: dict[str, object] = {}
+    for batch in client.events.stream(
+        batch_size=None,
+        max_batch_seconds=30.0,
+        reconnect=False,
+        idle_reconnect_seconds=10.0,
+        checkpoint_path=config.events_checkpoint,
+        progress=False,
+    ):
+        for event in batch:
+            curve = curvemap.get(event.curve.name)
+            if curve and curve.table_name() in category_set:
+                target_curves[curve.name] = curve
+
+    print(f"Events mode: {len(target_curves)} curves with updates")
+
+    if not target_curves:
+        print("No curve updates, nothing to dispatch")
+        dbutils.notebook.exit(json.dumps([]))  # noqa: F821
+
+    table_categories = sorted({c.table_name() for c in target_curves.values()})
+else:
+    target_curves = {
+        c.name: c
+        for c in curvemap.values()
+        if c.table_name() in category_set
+    }
+
+print(f"Target: {len(target_curves)} curves across {len(table_categories)} categories")
+
+# COMMAND ----------
+
+# DBTITLE 1,Generate pending requests
 FOREIGN_UNITS = {"GBP", "USD"}
 
 now = dt.datetime.now(dt.timezone.utc)
-curvemap = client.metadata.curvemap
 request_rows: list[dict] = []
 
-for cat in table_categories:
-    curves = [c for c in curvemap.values() if c.table_name() == cat]
-    for c in curves:
-        cluster_key = c.cluster_key()
-        base_row = {
-            "curve_name": c.name,
-            "curve_type": c.curve_type.name,
-            "data_type": c.data_type.name,
-            "table_category": cat,
-            "cluster_key": cluster_key,
-            "begin": begin_dt,
-            "end": end_dt,
-            "ensembles": False,
-            "unit": c.unit,
-            "mode": config.mode,
-            "created_at": now,
-        }
-        base_row["request_id"] = f"{c.name}|{begin_dt.isoformat()}|{end_dt.isoformat()}"
-        request_rows.append(base_row)
+for c in target_curves.values():
+    cat = c.table_name()
+    cluster_key = c.cluster_key()
+    base_row = {
+        "curve_name": c.name,
+        "curve_type": c.curve_type.name,
+        "data_type": c.data_type.name,
+        "table_category": cat,
+        "cluster_key": cluster_key,
+        "begin": begin_dt,
+        "end": end_dt,
+        "ensembles": False,
+        "unit": c.unit,
+        "mode": config.mode,
+        "created_at": now,
+    }
+    base_row["request_id"] = f"{c.name}|{begin_dt.isoformat()}|{end_dt.isoformat()}"
+    request_rows.append(base_row)
 
-        if c.curve_type == CurveType.INSTANCE:
-            ens_row = {**base_row, "ensembles": True}
-            ens_row["request_id"] = f"{c.name}|ensembles|{begin_dt.isoformat()}|{end_dt.isoformat()}"
-            request_rows.append(ens_row)
+    if c.curve_type == CurveType.INSTANCE:
+        ens_row = {**base_row, "ensembles": True}
+        ens_row["request_id"] = f"{c.name}|ensembles|{begin_dt.isoformat()}|{end_dt.isoformat()}"
+        request_rows.append(ens_row)
 
-        if c.unit and any(cu in c.unit for cu in FOREIGN_UNITS):
-            eur_unit = c.unit
-            for cu in FOREIGN_UNITS:
-                eur_unit = eur_unit.replace(cu, "EUR")
-            eur_row = {**base_row, "unit": eur_unit}
-            eur_row["request_id"] = f"{c.name}|{eur_unit}|{begin_dt.isoformat()}|{end_dt.isoformat()}"
-            request_rows.append(eur_row)
+    if c.unit and any(cu in c.unit for cu in FOREIGN_UNITS):
+        eur_unit = c.unit
+        for cu in FOREIGN_UNITS:
+            eur_unit = eur_unit.replace(cu, "EUR")
+        eur_row = {**base_row, "unit": eur_unit}
+        eur_row["request_id"] = f"{c.name}|{eur_unit}|{begin_dt.isoformat()}|{end_dt.isoformat()}"
+        request_rows.append(eur_row)
 
 requests_df = pl.DataFrame(request_rows, schema=PENDING_REQUESTS_SCHEMA.to_polars_schema())
 
@@ -163,20 +199,10 @@ print(f"Inserted {requests_df.height} pending requests across {len(table_categor
 # COMMAND ----------
 
 # DBTITLE 1,Group categories by (data_type, curve_type)
-cluster_key_map = {}
-for row in (
-    df.select("table_category", "curve_data_type", "curve_type")
-    .unique(subset=["table_category"])
-    .iter_rows(named=True)
-):
-    ck = (
-        f"{_safe_name(row['curve_data_type'] or '')}_{_safe_name(row['curve_type'] or '')}"
-    )
-    cluster_key_map[row["table_category"]] = ck
-
 groups: dict[str, list[str]] = {}
 for cat in table_categories:
-    ck = cluster_key_map.get(cat, "unknown")
+    cluster_keys = {c.cluster_key() for c in target_curves.values() if c.table_name() == cat}
+    ck = next(iter(cluster_keys), "unknown")
     groups.setdefault(ck, []).append(cat)
 
 print(

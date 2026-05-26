@@ -75,6 +75,8 @@ resources:
           default: ${var.schema_name}
         - name: mode
           default: append
+        - name: events
+          default: "false"
 
       tasks:
         - task_key: plan
@@ -88,6 +90,7 @@ resources:
               end_date: "{{job.parameters.end_date}}"
               seconds: "{{job.parameters.seconds}}"
               mode: "{{job.parameters.mode}}"
+              events: "{{job.parameters.events}}"
 
 targets:
   dev:
