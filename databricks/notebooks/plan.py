@@ -186,10 +186,29 @@ print(
 
 # COMMAND ----------
 
-# DBTITLE 1,Get or create cluster per group & dispatch jobs
+# DBTITLE 1,Get or create clusters (non-blocking)
+clusters_svc = client.databricks.compute.clusters
+
+group_clusters: dict[str, object] = {}
+
+for cluster_key in sorted(groups):
+    cluster_name = f"monteleq-{cluster_key}"
+    cluster = clusters_svc.all_purpose_cluster(
+        name=cluster_name,
+        custom_tags={"package": "monteleq", "cluster_key": cluster_key},
+        libraries=["energyquantified"],
+    )
+    cluster.start(wait=False)
+    group_clusters[cluster_key] = cluster
+    logger.info("Cluster %s (id=%s) starting", cluster_name, cluster.cluster_id)
+
+print(f"Initiated {len(group_clusters)} clusters: {sorted(group_clusters)}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Dispatch category jobs per cluster
 from databricks.sdk.service.jobs import NotebookTask, SubmitTask
 
-clusters_svc = client.databricks.compute.clusters
 jobs_svc = client.databricks.compute.jobs
 
 end_date_iso = end_dt.isoformat()
@@ -198,39 +217,26 @@ ingest_notebook = f"{config.notebook_root}/ingest_by_category"
 dispatched_runs = []
 
 for cluster_key, categories in sorted(groups.items()):
-    cluster_name = f"monteleq-{cluster_key}"
+    cluster = group_clusters[cluster_key]
 
-    cluster = clusters_svc.all_purpose_cluster(
-        name=cluster_name,
-        custom_tags={"package": "monteleq", "cluster_key": cluster_key},
-        libraries=["energyquantified"],
-    )
-    cluster.ensure_running()
-
-    logger.info(
-        "Cluster %s ready (id=%s) for %d categories",
-        cluster_name, cluster.cluster_id, len(categories),
-    )
-
-    tasks = []
-    for cat in categories:
-        tasks.append(
-            SubmitTask(
-                task_key=cat.replace("-", "_"),
-                existing_cluster_id=cluster.cluster_id,
-                notebook_task=NotebookTask(
-                    notebook_path=ingest_notebook,
-                    base_parameters={
-                        "table_category": cat,
-                        "end_date": end_date_iso,
-                        "seconds": str(config.seconds),
-                        "catalog_name": config.catalog_name,
-                        "schema_name": config.schema_name,
-                        "mode": config.mode,
-                    },
-                ),
-            )
+    tasks = [
+        SubmitTask(
+            task_key=cat.replace("-", "_"),
+            existing_cluster_id=cluster.cluster_id,
+            notebook_task=NotebookTask(
+                notebook_path=ingest_notebook,
+                base_parameters={
+                    "table_category": cat,
+                    "end_date": end_date_iso,
+                    "seconds": str(config.seconds),
+                    "catalog_name": config.catalog_name,
+                    "schema_name": config.schema_name,
+                    "mode": config.mode,
+                },
+            ),
         )
+        for cat in categories
+    ]
 
     run = jobs_svc.submit(
         run_name=f"monteleq-ingest-{cluster_key}",
@@ -246,7 +252,7 @@ for cluster_key, categories in sorted(groups.items()):
 
     logger.info(
         "Dispatched run %s on cluster %s with %d category tasks",
-        run.run_id, cluster_name, len(tasks),
+        run.run_id, cluster.cluster_name, len(tasks),
     )
 
 print(f"Dispatched {len(dispatched_runs)} job runs across {len(groups)} clusters")
