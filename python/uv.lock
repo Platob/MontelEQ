@@ -491,7 +491,7 @@ name = "importlib-metadata"
 version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp" },
+    { name = "zipp", marker = "python_full_version < '3.15'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405, upload-time = "2026-03-20T06:42:56.999Z" }
 wheels = [
@@ -706,7 +706,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "twine", marker = "extra == 'dev'" },
-    { name = "ygg", extras = ["databricks"], specifier = "==0.8.*" },
+    { name = "ygg", extras = ["databricks"], specifier = ">=0.8.35,<0.9" },
 ]
 provides-extras = ["dev"]
 
@@ -1578,7 +1578,7 @@ wheels = [
 
 [[package]]
 name = "ygg"
-version = "0.8.14"
+version = "0.8.35"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "orjson" },
@@ -1586,9 +1586,9 @@ dependencies = [
     { name = "pyarrow" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6c/52/156da1ab8de7c2e76bbb409f7e0972d615270854107bce4ec38863f62acb/ygg-0.8.14.tar.gz", hash = "sha256:b38d28c8402700a6cd19170a98a6ff26a7b4ad4f1012bab720a40e9c2988e91c", size = 1586182, upload-time = "2026-05-24T09:43:57.767Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/e8/1fdc9efa4e08a5a8ed7c7e1870a5173513852c176f13331ed6e14bf398e5/ygg-0.8.35.tar.gz", hash = "sha256:1af61476365a2d4f3efab380dc9d29bf92ca9e8955130d62f4320c9e4b79cbbe", size = 1445194, upload-time = "2026-05-29T13:40:01.707Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/77/460829b43e7c87bb65b3c50721247c362fe8367dd7212a5a2c8d2554d31e/ygg-0.8.14-py3-none-any.whl", hash = "sha256:c45598eae3621ec855e56ffc5ea1391e21bad694a789afa89843d8538a346284", size = 1825449, upload-time = "2026-05-24T09:43:59.586Z" },
+    { url = "https://files.pythonhosted.org/packages/11/71/13295bca72032ec64ba208df317b782e0141fa0df6a8a96b2d7ff07d8452/ygg-0.8.35-py3-none-any.whl", hash = "sha256:342c92c0327f7fcc9309539c9b7492109fb9f36caef8dccceeeec5c3b6a57ff6", size = 1672967, upload-time = "2026-05-29T13:40:03.586Z" },
 ]
 
 [package.optional-dependencies]
