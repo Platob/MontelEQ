@@ -200,19 +200,36 @@ if not categories:
 # COMMAND ----------
 
 # DBTITLE 1,Phase 2 — get/create one cluster per category (parallel)
+# Fault-tolerant: a failure provisioning one category's cluster is logged and
+# skipped so the remaining categories still get dispatched.
 def _get_or_create_cluster(category: str):
-    return client.databricks.clusters.get_or_create(
-        cluster_name=f"monteleq-ingest-{category}",
-        custom_tags={"package": "monteleq", "table_category": category},
-        libraries=["energyquantified"],
-        wait=False,
-    ).start(wait=False)
+    try:
+        cluster = client.databricks.clusters.get_or_create(
+            cluster_name=f"monteleq-ingest-{category}",
+            custom_tags={"package": "monteleq", "table_category": category},
+            libraries=["energyquantified"],
+            wait=False,
+        ).start(wait=False)
+        return category, cluster
+    except Exception:
+        logger.exception("Cluster get/create failed for category=%s", category)
+        return category, None
 
 
 with ThreadPoolExecutor(max_workers=config.max_clusters) as executor:
-    clusters = dict(zip(categories, executor.map(_get_or_create_cluster, categories)))
+    clusters = {
+        cat: cluster
+        for cat, cluster in executor.map(_get_or_create_cluster, categories)
+        if cluster is not None
+    }
 
+failed = sorted(set(categories) - set(clusters))
+if failed:
+    logger.warning("Cluster provisioning failed for %d categories: %s", len(failed), failed)
 logger.info("Started %d clusters: %s", len(clusters), sorted(clusters))
+
+if not clusters:
+    dbutils.notebook.exit("no_clusters")  # noqa: F821
 
 # COMMAND ----------
 
@@ -221,33 +238,38 @@ end_date_iso = end_dt.isoformat()
 ingest_notebook = f"{config.notebook_root}/ingest_category"
 
 dispatched: list[dict] = []
+dispatch_errors: list[str] = []
 
-for category in categories:
-    cluster = clusters[category]
-
-    run = client.databricks.jobs.submit(
-        run_name=f"monteleq-ingest-{category}-{run_id}",
-        timeout_seconds=3600,
-        tasks=[
-            SubmitTask(
-                task_key=f"ingest_{_safe_name(category)}",
-                existing_cluster_id=cluster.cluster_id,
-                timeout_seconds=3600,
-                notebook_task=NotebookTask(
-                    notebook_path=ingest_notebook,
-                    base_parameters={
-                        "table_category": category,
-                        "end_date": end_date_iso,
-                        "seconds": str(config.seconds),
-                        "catalog_name": config.catalog_name,
-                        "schema_name": config.schema_name,
-                        "mode": config.mode,
-                        "pending_table": config.pending_table,
-                    },
-                ),
-            )
-        ],
-    )
+for category, cluster in sorted(clusters.items()):
+    try:
+        run = client.databricks.jobs.submit(
+            run_name=f"monteleq-ingest-{category}-{run_id}",
+            timeout_seconds=3600,
+            raise_error=False,
+            tasks=[
+                SubmitTask(
+                    task_key=f"ingest_{_safe_name(category)}",
+                    existing_cluster_id=cluster.cluster_id,
+                    timeout_seconds=3600,
+                    notebook_task=NotebookTask(
+                        notebook_path=ingest_notebook,
+                        base_parameters={
+                            "table_category": category,
+                            "end_date": end_date_iso,
+                            "seconds": str(config.seconds),
+                            "catalog_name": config.catalog_name,
+                            "schema_name": config.schema_name,
+                            "mode": config.mode,
+                            "pending_table": config.pending_table,
+                        },
+                    ),
+                )
+            ],
+        )
+    except Exception:
+        logger.exception("Dispatch failed for category=%s", category)
+        dispatch_errors.append(category)
+        continue
 
     dispatched.append(
         {"table_category": category, "cluster_id": cluster.cluster_id, "run_id": run.run_id}
@@ -257,7 +279,13 @@ for category in categories:
         category, cluster.cluster_id, run.run_id,
     )
 
-print(f"Dispatched {len(dispatched)} category jobs across {len(clusters)} clusters")
+if dispatch_errors:
+    logger.warning(
+        "Dispatch failed for %d categories: %s",
+        len(dispatch_errors), sorted(dispatch_errors),
+    )
+
+print(f"Dispatched {len(dispatched)} of {len(clusters)} category jobs")
 
 # COMMAND ----------
 
