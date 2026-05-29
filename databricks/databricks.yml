@@ -59,7 +59,9 @@ resources:
   jobs:
     monteleq_dispatcher:
       name: monteleq-dispatcher
-      max_concurrent_runs: 4
+      # Single concurrency: the scheduled scan advances a shared EQ events
+      # checkpoint file, so overlapping runs must not race on it.
+      max_concurrent_runs: 1
       tags:
         package: monteleq
         pipeline: ingestion-dispatcher
