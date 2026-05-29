@@ -1,27 +1,30 @@
-# Databricks Asset Bundle for the MontelEQ pipeline.
+# Databricks Asset Bundle for the MontelEQ ingestion pipeline.
 #
-#   monteleq_ingestion
-#       plan (self-contained orchestrator)
+# Follows the Meteologica (https://github.com/Platob/Meteologica) ingestion
+# pattern, sourcing data from EnergyQuantified (EQ):
 #
-#       The plan task:
-#         1. Refreshes curve metadata referential
-#         2. Generates pending_requests rows for each curve×window
-#         3. Groups table categories by (data_type, curve_type)
-#         4. Gets or creates a dedicated cluster per group
-#         5. Dispatches per-category ingest jobs on the group cluster
+#   monteleq_dispatcher
+#       dispatcher (self-contained orchestrator)
+#
+#       The dispatcher task:
+#         1. Refreshes the curve-metadata referential
+#         2. Scans for work and queues it:
+#              - scheduled (seconds <= 3600): streams EQ curve-update events and
+#                queues the updated curves into `pending_requests`, bucketed by
+#                table_category
+#              - backfill (seconds > 3600): dispatches every known category over
+#                the full window (no queue)
+#         3. Gets/creates one dedicated all-purpose cluster per category,
+#            in parallel across categories
+#         4. Submits one `ingest_category` job run per category on its cluster
 #
 #       By default (scheduled every hour):
-#           plan pins end_date=now, seconds=3600.
-#           Each (data_type, curve_type) group runs on its own cluster.
-#           ingest_by_category runs once per table_category.
+#           dispatcher pins end_date=now, seconds=3600.
+#           Each table_category runs on its own dedicated cluster.
 #
-#       Manual backfill:
-#           Set `end_date` and `seconds` to cover the desired window.
-#           `mode` can be set to `overwrite`.
+#   Manual backfill example (6 months, overwrite):
 #
-#   Manual backfill example:
-#
-#   databricks bundle run -t prd monteleq_ingestion \
+#   databricks bundle run -t prd monteleq_dispatcher \
 #       --params end_date=2024-06-30T23:59:59Z \
 #       --params seconds=15811200 \
 #       --params mode=overwrite \
@@ -29,8 +32,8 @@
 #
 #   Relaunch specific table categories only:
 #
-#   databricks bundle run -t prd monteleq_ingestion \
-#       --params table_category=curated_actual_timeseries_power,curated_forecast_instance_wind
+#   databricks bundle run -t prd monteleq_dispatcher \
+#       --params table_category=actual_timeseries_power,forecast_instance_wind
 
 bundle:
   name: monteleq
@@ -43,30 +46,34 @@ variables:
     description: "Schema within the catalog."
     default: src_monteleq
   cluster_id:
-    description: "Cluster for the plan orchestrator."
+    description: "Existing cluster for the dispatcher (metadata refresh + API scan + fan-out)."
     default: 0525-144942-xjlhyl98
+  notebook_root:
+    description: "Workspace path the notebooks are uploaded to."
+    default: /Workspace/Shared/MontelEQ/databricks/notebooks
 
 workspace:
   host: https://dbc-82edd6f4-1e97.cloud.databricks.com
 
 resources:
   jobs:
-    monteleq_ingestion:
-      name: monteleq-ingestion
-      max_concurrent_runs: 1
+    monteleq_dispatcher:
+      name: monteleq-dispatcher
+      max_concurrent_runs: 4
       tags:
         package: monteleq
-        pipeline: ingestion
+        pipeline: ingestion-dispatcher
 
       schedule:
         quartz_cron_expression: "0 0 * * * ?"
         timezone_id: UTC
+        pause_status: UNPAUSED
 
       parameters:
-        - name: end_date
-          default: "now"
         - name: seconds
           default: "3600"
+        - name: end_date
+          default: ""
         - name: table_category
           default: ""
         - name: catalog_name
@@ -75,14 +82,13 @@ resources:
           default: ${var.schema_name}
         - name: mode
           default: append
-        - name: events
-          default: "false"
 
       tasks:
-        - task_key: plan
+        - task_key: dispatcher
           existing_cluster_id: ${var.cluster_id}
+          timeout_seconds: 1200
           notebook_task:
-            notebook_path: ./notebooks/plan.py
+            notebook_path: ./notebooks/dispatcher.py
             base_parameters:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
@@ -90,7 +96,7 @@ resources:
               end_date: "{{job.parameters.end_date}}"
               seconds: "{{job.parameters.seconds}}"
               mode: "{{job.parameters.mode}}"
-              events: "{{job.parameters.events}}"
+              notebook_root: ${var.notebook_root}
 
 targets:
   dev:

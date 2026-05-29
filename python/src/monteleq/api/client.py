@@ -29,7 +29,9 @@ from monteleq.api.events_client import EventsClient
 from monteleq.api.metadata_client import MetadataClient
 from monteleq.api.request import CurveRequest, CurveRequestsArg
 from monteleq.api.schemas import CURATED_DATA_SCHEMA
-from monteleq.model import Instance, DEFAULT_ISSUE_INTERVAL
+from monteleq.model import Curve, Instance, DEFAULT_ISSUE_INTERVAL
+
+FOREIGN_UNITS: tuple[str, ...] = ("GBP", "USD")
 
 __all__ = ["APIClient"]
 
@@ -74,6 +76,93 @@ class APIClient(BaseClient):
         self.metadata = MetadataClient(self)
         self.events = EventsClient(self)
         self.curation = CurationClient(self)
+
+    # ------------------------------------------------------------------
+    # Referential / queue helpers (dispatcher + worker orchestration)
+    # ------------------------------------------------------------------
+
+    def refresh_metadata(
+        self,
+        *,
+        table_name: str = "curated_curve_metadata",
+        mode: Mode | str = Mode.UPSERT,
+    ) -> tuple[Any, polars.DataFrame]:
+        """Refresh the curve-metadata referential from the live catalog.
+
+        Upserts one row per curve into ``<schema>.<table_name>`` and returns
+        the ``(table, dataframe)`` pair.  Raises if the catalog is empty.
+        """
+        from monteleq.api.schemas import CURVE_METADATA_SCHEMA
+
+        df = self.metadata.metadata_df()
+        if df.height == 0:
+            raise RuntimeError("refresh_metadata: no curves found")
+
+        resolved = mode if isinstance(mode, Mode) else self._resolve_insert_mode(mode)
+        table = self.sql.table(table_name=table_name).ensure_created(CURVE_METADATA_SCHEMA)
+        table.insert(
+            df,
+            mode=resolved,
+            match_by=["curve_id"],
+            where=expr_col("curve_id").is_in(df["curve_id"].to_list()),
+        )
+        return table, df
+
+    def pending_requests_table(self, *, table_name: str = "pending_requests") -> Any:
+        """Return (creating if absent) the pending-requests queue Delta table."""
+        from monteleq.api.schemas import PENDING_REQUESTS_SCHEMA
+
+        return self.sql.table(table_name=table_name).ensure_created(PENDING_REQUESTS_SCHEMA)
+
+    def categories(self) -> list[str]:
+        """Sorted list of every table category in the current curve catalog."""
+        return sorted({c.table_name() for c in self.metadata.curvemap.values()})
+
+    def category_curves(self, category: str) -> list[Curve]:
+        """All curves routed to ``category`` (i.e. ``curve.table_name() == category``)."""
+        return [c for c in self.metadata.curvemap.values() if c.table_name() == category]
+
+    def curve_requests(
+        self,
+        curves: Iterable[Curve],
+        *,
+        begin: dt.datetime,
+        end: dt.datetime,
+        issued_at_earliest: dt.datetime | None = None,
+        raise_error: bool = False,
+        foreign_units: Iterable[str] = FOREIGN_UNITS,
+    ) -> list[CurveRequest]:
+        """Build the fetch requests for a set of curves over ``[begin, end]``.
+
+        Expands each curve into its variants: the base request, an additional
+        ensembles request for ``INSTANCE`` curves, and an additional EUR-unit
+        request for curves priced in a foreign currency (GBP/USD).
+        """
+        from energyquantified.metadata import CurveType
+
+        foreign = tuple(foreign_units)
+        requests: list[CurveRequest] = []
+        for c in curves:
+            base = CurveRequest(
+                curve=c,
+                begin=begin,
+                end=end,
+                issued_at_earliest=issued_at_earliest or begin,
+                client=self,
+                raise_error=raise_error,
+            )
+            requests.append(base)
+
+            if c.curve_type == CurveType.INSTANCE:
+                requests.append(base.copy(ensembles=True))
+
+            if c.unit and any(cu in c.unit for cu in foreign):
+                eur_unit = c.unit
+                for cu in foreign:
+                    eur_unit = eur_unit.replace(cu, "EUR")
+                requests.append(base.copy(unit=eur_unit))
+
+        return requests
 
     # ------------------------------------------------------------------
     # Instance listing
