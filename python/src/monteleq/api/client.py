@@ -299,8 +299,6 @@ class APIClient(BaseClient):
         spark: "SparkSession | bool | None" = None,
         batch_size: int | None = None,
     ) -> Iterator[Any]:
-        import dataclasses
-
         spark_session = self._resolve_spark(spark)
         http_requests = CurveRequest.http_requests(
             requests,
