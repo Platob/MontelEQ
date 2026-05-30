@@ -75,6 +75,70 @@ class TestCategoryCurves:
         assert APIClient.category_curves(_client(curves), "does_not_exist") == []
 
 
+class TestParseCurveIds:
+    def test_empty_inputs(self):
+        assert APIClient.parse_curve_ids("") == set()
+        assert APIClient.parse_curve_ids(None) == set()
+        assert APIClient.parse_curve_ids([]) == set()
+
+    def test_comma_string_trimmed(self):
+        assert APIClient.parse_curve_ids(" a , b ,, c ") == {"a", "b", "c"}
+
+    def test_iterable_of_ids(self):
+        assert APIClient.parse_curve_ids([1, 2, "x"]) == {"1", "2", "x"}
+
+
+class TestSelectCurves:
+    def test_no_filters_returns_all(self, curves):
+        result = APIClient.select_curves(_client(curves))
+        assert {c.name for c in result} == {c.name for c in curves}
+
+    def test_filter_by_category(self, curves):
+        cat = curves[1].table_name()
+        result = APIClient.select_curves(_client(curves), table_categories=[cat])
+        assert [c.name for c in result] == [curves[1].name]
+
+    def test_filter_by_curve_id(self, curves):
+        target = curves[0]
+        result = APIClient.select_curves(
+            _client(curves), curve_ids={str(target.id)}
+        )
+        assert [c.name for c in result] == [target.name]
+
+    def test_filter_by_curve_name(self, curves):
+        target = curves[2]
+        result = APIClient.select_curves(_client(curves), curve_ids={target.name})
+        assert [c.name for c in result] == [target.name]
+
+    def test_category_and_id_combine_with_and(self, curves):
+        # curves[0] is the only curve in its category; pairing it with another
+        # curve's id yields nothing (AND semantics).
+        cat = curves[0].table_name()
+        result = APIClient.select_curves(
+            _client(curves), table_categories=[cat], curve_ids={str(curves[1].id)}
+        )
+        assert result == []
+
+    def test_unknown_id_returns_empty(self, curves):
+        assert APIClient.select_curves(_client(curves), curve_ids={"nope"}) == []
+
+
+class TestClusterKeyGrouping:
+    def test_category_uniquely_maps_to_cluster_key(self, curves):
+        # The dispatcher groups categories by cluster_key via setdefault, which
+        # is only safe if every curve in a table_category shares one cluster_key.
+        # table_name embeds data_type + curve_type, so this must hold.
+        by_category: dict[str, set[str]] = {}
+        for c in curves:
+            by_category.setdefault(c.table_name(), set()).add(c.cluster_key())
+        for cat, keys in by_category.items():
+            assert len(keys) == 1, f"{cat} maps to multiple cluster keys: {keys}"
+
+    def test_cluster_key_is_table_name_prefix(self, curves):
+        for c in curves:
+            assert c.table_name().startswith(c.cluster_key())
+
+
 class TestCurveRequests:
     def _window(self):
         return (

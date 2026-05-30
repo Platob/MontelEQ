@@ -122,6 +122,45 @@ class APIClient(BaseClient):
         """All curves routed to ``category`` (i.e. ``curve.table_name() == category``)."""
         return [c for c in self.metadata.curvemap.values() if c.table_name() == category]
 
+    @staticmethod
+    def parse_curve_ids(curve_ids: str | Iterable[str] | None) -> set[str]:
+        """Parse a comma-separated string (or iterable) of curve identifiers.
+
+        Each token is matched in :meth:`select_curves` against either a
+        curve's integer ``id`` (as a string) or its ``name``, so callers may
+        pass either form interchangeably.
+        """
+        if not curve_ids:
+            return set()
+        if isinstance(curve_ids, str):
+            return {t.strip() for t in curve_ids.split(",") if t.strip()}
+        return {str(t).strip() for t in curve_ids if str(t).strip()}
+
+    def select_curves(
+        self,
+        *,
+        table_categories: Iterable[str] | None = None,
+        curve_ids: Iterable[str] | None = None,
+    ) -> list[Curve]:
+        """Select catalog curves by ``table_category`` and/or curve id/name.
+
+        Both filters are optional and combine with AND semantics: with no
+        filters every catalog curve is returned; with both, a curve must be in
+        one of ``table_categories`` *and* match one of ``curve_ids`` (by
+        ``str(curve.id)`` or ``curve.name``).
+        """
+        cats = set(table_categories) if table_categories is not None else None
+        ids = set(curve_ids) if curve_ids is not None else None
+
+        out: list[Curve] = []
+        for c in self.metadata.curvemap.values():
+            if cats is not None and c.table_name() not in cats:
+                continue
+            if ids is not None and str(c.id) not in ids and c.name not in ids:
+                continue
+            out.append(c)
+        return out
+
     def curve_requests(
         self,
         curves: Iterable[Curve],
@@ -345,6 +384,7 @@ class APIClient(BaseClient):
         spark: "SparkSession | bool | None" = None,
         batch_size: int | None = None,
         insert_mode: Mode | str | None = None,
+        _stats: dict[str, int] | None = None,
     ) -> Iterator[Any]:
         resolved_mode = self._resolve_insert_mode(insert_mode)
         spark_session = self._resolve_spark(spark)
@@ -366,6 +406,7 @@ class APIClient(BaseClient):
                     insert_all=insert_all,
                     return_data=return_data,
                     insert_mode=resolved_mode,
+                    stats=_stats,
                 )
             else:
                 yield from self._curate_batch_polars(
@@ -373,6 +414,7 @@ class APIClient(BaseClient):
                     insert_all=insert_all,
                     return_data=return_data,
                     insert_mode=resolved_mode,
+                    stats=_stats,
                 )
 
     # ------------------------------------------------------------------
@@ -401,8 +443,16 @@ class APIClient(BaseClient):
         Defaults to ``Mode.APPEND``.
         """
         t0 = time.perf_counter()
-        stats: dict[str, int | float] = {"fetched": 0, "curated": 0, "tables": 0}
+        stats: dict[str, int | float] = {
+            "batches": 0,
+            "curated_rows": 0,
+            "inserts": 0,
+            "insert_failures": 0,
+        }
 
+        # ``curate_curves(return_data=False)`` yields nothing, but iterating it
+        # to exhaustion still drives the fetch → curate → insert side effects
+        # and the ``_stats`` accumulator below.
         for _ in self.curate_curves(
             requests,
             raise_error=raise_error,
@@ -411,13 +461,16 @@ class APIClient(BaseClient):
             spark=spark,
             batch_size=batch_size,
             insert_mode=insert_mode,
+            _stats=stats,
         ):
-            stats["fetched"] += 1
+            pass
 
         stats["elapsed"] = round(time.perf_counter() - t0, 2)
         logger.info(
-            "ingest complete: %.2fs elapsed",
-            stats["elapsed"],
+            "ingest complete: %d batches, %d curated rows, %d inserts, "
+            "%d failures, %.2fs elapsed",
+            stats["batches"], stats["curated_rows"], stats["inserts"],
+            stats["insert_failures"], stats["elapsed"],
         )
         return stats
 
@@ -432,7 +485,11 @@ class APIClient(BaseClient):
         insert_all: bool,
         return_data: bool,
         insert_mode: Mode = Mode.APPEND,
+        stats: dict[str, int] | None = None,
     ) -> Iterator[Any]:
+        if stats is not None:
+            stats["batches"] = stats.get("batches", 0) + 1
+
         if insert_all:
             base = batch.read_spark_frame()
         elif batch.new is None:
@@ -442,10 +499,15 @@ class APIClient(BaseClient):
 
         try:
             curated = self.curate_responses_spark(base).cache()
-            curated.count()
+            row_count = curated.count()
         except Exception:
             logger.exception("Spark curation failed for batch")
+            if stats is not None:
+                stats["insert_failures"] = stats.get("insert_failures", 0) + 1
             return
+
+        if stats is not None:
+            stats["curated_rows"] = stats.get("curated_rows", 0) + row_count
 
         curve_names = [
             _["curve_name"]
@@ -460,9 +522,10 @@ class APIClient(BaseClient):
                 groups.setdefault(tb, []).append(n)
 
         for tb, names in groups.items():
-            sub = curated.filter(
-                f"curve_name in ({', '.join(repr(n) for n in names)})"
-            )
+            # ``Column.isin`` keeps quoting out of our hands — curve names may
+            # contain characters (e.g. apostrophes) that break an interpolated
+            # ``curve_name in (...)`` SQL predicate.
+            sub = curated.filter(curated["curve_name"].isin(names))
             if sub.limit(1).count() == 0:
                 continue
             try:
@@ -476,8 +539,12 @@ class APIClient(BaseClient):
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     where=_curve_id_predicate(curve_ids),
                 )
+                if stats is not None:
+                    stats["inserts"] = stats.get("inserts", 0) + 1
             except Exception:
                 logger.exception("Insert failed for table %s", tb)
+                if stats is not None:
+                    stats["insert_failures"] = stats.get("insert_failures", 0) + 1
 
         if return_data:
             yield curated
@@ -493,7 +560,11 @@ class APIClient(BaseClient):
         insert_all: bool,
         return_data: bool,
         insert_mode: Mode = Mode.APPEND,
+        stats: dict[str, int] | None = None,
     ) -> Iterator[polars.DataFrame]:
+        if stats is not None:
+            stats["batches"] = stats.get("batches", 0) + 1
+
         if insert_all:
             responses = batch.iter_responses()
         elif batch.new is None:
@@ -509,6 +580,8 @@ class APIClient(BaseClient):
                 df = self.curation.curate(response)
             except Exception:
                 logger.exception("Curation failed for response %s", response)
+                if stats is not None:
+                    stats["insert_failures"] = stats.get("insert_failures", 0) + 1
                 continue
             if df.height == 0:
                 continue
@@ -522,6 +595,9 @@ class APIClient(BaseClient):
             if len(curated_parts) == 1
             else polars.concat(curated_parts, how="diagonal_relaxed")
         )
+
+        if stats is not None:
+            stats["curated_rows"] = stats.get("curated_rows", 0) + curated.height
 
         cm = self.metadata.curvemap
         groups: dict[str, list[str]] = {}
@@ -548,8 +624,12 @@ class APIClient(BaseClient):
                     wait=False,
                     where=_curve_id_predicate(curve_ids),
                 )
+                if stats is not None:
+                    stats["inserts"] = stats.get("inserts", 0) + 1
             except Exception:
                 logger.exception("Insert failed for table %s", tb)
+                if stats is not None:
+                    stats["insert_failures"] = stats.get("insert_failures", 0) + 1
 
         if return_data:
             yield curated

@@ -22,8 +22,12 @@
 # MAGIC Parameters:
 # MAGIC
 # MAGIC * `table_category` — table category key (e.g. `actual_timeseries_power`).
+# MAGIC * `curve_ids` — optional comma-separated curve ids/names to restrict the
+# MAGIC   run to specific curves within the category.
 # MAGIC * `end_date` — end of the ingestion window (ISO-8601, default now).
 # MAGIC * `seconds` — lookback in seconds (default 3600).
+# MAGIC * `batch_size` — HTTP requests fetched + curated + inserted per batch
+# MAGIC   (default 200); bounds worker memory on large windows.
 # MAGIC * `mode` — insert mode (`append`, `overwrite`, `upsert`).
 
 # COMMAND ----------
@@ -47,8 +51,10 @@ logger.setLevel(logging.INFO)
 
 class Config(SystemParameters):
     table_category: str = ""
+    curve_ids: str = ""
     end_date: str = ""
     seconds: int = 3600
+    batch_size: int = 200
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     mode: str = "append"
@@ -85,7 +91,16 @@ logger.info(
 # DBTITLE 1,Resolve curves (pending queue → fallback to full category)
 client = APIClient(catalog_name=config.catalog_name, schema_name=config.schema_name)
 
-category_curves = {c.name: c for c in client.category_curves(config.table_category)}
+# Restrict to the dispatched category, optionally narrowed to specific curve
+# ids/names forwarded by the dispatcher (matched by str(curve.id) or name).
+curve_ids = client.parse_curve_ids(config.curve_ids)
+category_curves = {
+    c.name: c
+    for c in client.select_curves(
+        table_categories=[config.table_category],
+        curve_ids=curve_ids or None,
+    )
+}
 if not category_curves:
     logger.warning("No curves found for table_category=%s", config.table_category)
     print({"table_category": config.table_category, "curves": 0, "status": "empty"})
@@ -136,6 +151,7 @@ stats = client.ingest_spark(
     requests,
     spark=True,
     raise_error=False,
+    batch_size=config.batch_size,
     insert_mode=insert_mode,
 )
 
@@ -144,8 +160,11 @@ logger.info("Ingestion complete: %s", result)
 
 # COMMAND ----------
 
-# DBTITLE 1,Drain consumed pending rows (idempotent)
-if pending_df.height:
+# DBTITLE 1,Drain consumed pending rows (idempotent, only on clean runs)
+# Only drain the queue when the run inserted with no failures — otherwise leave
+# the rows so the next run replays them over the same pinned window.
+insert_failures = int(stats.get("insert_failures", 0))
+if pending_df.height and insert_failures == 0:
     request_ids = pending_df["request_id"].to_list()
     id_csv = ", ".join("'" + rid.replace("'", "''") + "'" for rid in request_ids)
     client.sql.execute(
@@ -155,6 +174,12 @@ if pending_df.height:
     logger.info(
         "Drained %d pending rows for category=%s",
         len(request_ids), config.table_category,
+    )
+elif pending_df.height:
+    logger.warning(
+        "Skipping drain for category=%s: %d insert failure(s); "
+        "%d pending rows will replay next run",
+        config.table_category, insert_failures, pending_df.height,
     )
 
 # COMMAND ----------
