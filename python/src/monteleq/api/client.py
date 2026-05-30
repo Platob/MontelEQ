@@ -104,7 +104,7 @@ class APIClient(BaseClient):
             df,
             mode=resolved,
             match_by=["curve_id"],
-            where=expr_col("curve_id").is_in(df["curve_id"].to_list()),
+            predicate=expr_col("curve_id").is_in(df["curve_id"].to_list()),
         )
         return table, df
 
@@ -542,7 +542,7 @@ class APIClient(BaseClient):
                     sub,
                     mode=insert_mode,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
-                    where=_curve_id_predicate(curve_ids),
+                    predicate=_curve_id_predicate(curve_ids),
                 )
                 if stats is not None:
                     stats["inserts"] = stats.get("inserts", 0) + 1
@@ -627,7 +627,7 @@ class APIClient(BaseClient):
                     schema_mode=Mode.APPEND,
                     match_by=["curve_id", "curve_name", "run_hash", "from_timestamp"],
                     wait=False,
-                    where=_curve_id_predicate(curve_ids),
+                    predicate=_curve_id_predicate(curve_ids),
                 )
                 if stats is not None:
                     stats["inserts"] = stats.get("inserts", 0) + 1

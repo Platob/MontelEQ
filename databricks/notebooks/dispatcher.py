@@ -216,7 +216,7 @@ else:
         requests_df,
         mode=Mode.UPSERT,
         match_by=["request_id"],
-        where=col("request_id").is_in(requests_df["request_id"].to_list()),
+        predicate=col("request_id").is_in(requests_df["request_id"].to_list()),
     )
 
     categories = sorted({r["table_category"] for r in rows})
