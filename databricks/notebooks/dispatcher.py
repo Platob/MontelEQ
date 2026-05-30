@@ -12,11 +12,17 @@
 # MAGIC      bucketed by `table_category`; or
 # MAGIC    * *backfill* (`seconds > 3600`): dispatch every known category, fetching
 # MAGIC      the full window directly (no queue needed).
-# MAGIC 2. **Cluster** — for each discovered category, get-or-create a dedicated
-# MAGIC    Databricks all-purpose cluster via `client.databricks.clusters.get_or_create`,
-# MAGIC    in parallel across categories using a thread pool.
-# MAGIC 3. **Dispatch** — submit a one-off job run per category that runs
-# MAGIC    `ingest_category` on the category's dedicated cluster.
+# MAGIC 2. **Cluster** — group the in-scope categories by their coarse
+# MAGIC    `cluster_key` (`data_type_curve_type`) and get-or-create one dedicated
+# MAGIC    Databricks all-purpose cluster per cluster_key via
+# MAGIC    `client.databricks.clusters.get_or_create`, in parallel using a thread
+# MAGIC    pool. Categories sharing a cluster_key share a cluster, so the cluster
+# MAGIC    count stays bounded regardless of how many categories exist.
+# MAGIC 3. **Dispatch** — submit a one-off `ingest_category` job run per
+# MAGIC    `table_category` onto its cluster_key's shared cluster. When a
+# MAGIC    `curve_ids` filter is active, each worker is handed the explicit
+# MAGIC    in-scope curve ids for its category; otherwise it gets an empty
+# MAGIC    `curve_ids` and ingests every curve in the category.
 # MAGIC
 # MAGIC Parameters:
 # MAGIC
@@ -26,6 +32,10 @@
 # MAGIC   forwarded to each `ingest_category` job so retries use the same window.
 # MAGIC * `table_category` — optional comma-separated list to restrict the run to a
 # MAGIC   subset of categories (default: all).
+# MAGIC * `curve_ids` — optional comma-separated list of curve ids or names to
+# MAGIC   restrict the run to specific curves (combines with `table_category`).
+# MAGIC * `batch_size` — number of HTTP requests fetched + curated + inserted per
+# MAGIC   batch by each worker (default 200); bounds worker memory on backfills.
 # MAGIC * `mode` — insert mode for the curated writes (`append`, `overwrite`, `upsert`).
 # MAGIC
 # MAGIC Deploy / run:
@@ -69,6 +79,8 @@ class Config(SystemParameters):
     seconds: int = 3600
     end_date: str = ""
     table_category: str = ""
+    curve_ids: str = ""
+    batch_size: int = 200
     catalog_name: str = "trading_tgp_prd"
     schema_name: str = "src_monteleq"
     mode: str = "append"
@@ -97,29 +109,51 @@ begin_dt = end_dt - dt.timedelta(seconds=config.seconds)
 run_id = int(now.timestamp() * 1_000_000)
 
 requested = [c.strip() for c in config.table_category.split(",") if c.strip()]
+requested_ids = client.parse_curve_ids(config.curve_ids)
 
 table, meta_df = client.refresh_metadata(table_name=config.metadata_table)
 logger.info("Refreshed %d curves into %s", meta_df.height, table.name)
 
+curvemap = client.metadata.curvemap
 known_categories = set(client.categories())
 if requested:
     unknown = set(requested) - known_categories
     if unknown:
         raise ValueError(f"Unknown table categories: {sorted(unknown)}")
 
+if requested_ids:
+    known_ids = {str(c.id) for c in curvemap.values()} | set(curvemap.keys())
+    unknown_ids = requested_ids - known_ids
+    if unknown_ids:
+        raise ValueError(f"Unknown curve ids/names: {sorted(unknown_ids)}")
+
+# Map each table_category to its coarser cluster_key (data_type_curve_type) so
+# Phase 2 can provision one shared cluster per cluster_key rather than one per
+# category. ``setdefault`` keeps the first cluster_key seen; all curves routed
+# to a given category share the same (data_type, curve_type) by construction.
+cat_to_cluster_key: dict[str, str] = {}
+for c in curvemap.values():
+    cat_to_cluster_key.setdefault(c.table_name(), c.cluster_key())
+
+
+def _selected(curve) -> bool:
+    """Whether a curve is in scope given the table_category / curve_ids filters."""
+    if requested and curve.table_name() not in requested:
+        return False
+    if requested_ids and str(curve.id) not in requested_ids and curve.name not in requested_ids:
+        return False
+    return True
+
+
 print(f"Window: {begin_dt.isoformat()} -> {end_dt.isoformat()}  run_id={run_id}")
 
 # COMMAND ----------
 
 # DBTITLE 1,Phase 1 — scan & queue
-curvemap = client.metadata.curvemap
-
 if config.seconds > 3600:
-    # Backfill: dispatch all (or requested) categories. The per-category job
-    # fetches the full window directly; no pending queue required.
-    categories = sorted(known_categories)
-    if requested:
-        categories = [c for c in categories if c in requested]
+    # Backfill: dispatch every in-scope category. The per-category job fetches
+    # the full window directly; no pending queue required.
+    categories = sorted({c.table_name() for c in curvemap.values() if _selected(c)})
     logger.info("Backfill mode: %d categories", len(categories))
 else:
     # Scheduled: stream EQ curve-update events and queue the updated curves,
@@ -135,10 +169,7 @@ else:
     ):
         for event in batch:
             curve = curvemap.get(event.curve.name)
-            if curve is None:
-                continue
-            cat = curve.table_name()
-            if requested and cat not in requested:
+            if curve is None or not _selected(curve):
                 continue
             target[curve.name] = curve
 
@@ -197,35 +228,65 @@ else:
 if not categories:
     dbutils.notebook.exit("no_categories")  # noqa: F821
 
+# Resolve, per category, the explicit in-scope curve ids to forward to that
+# category's worker. Only populated when a curve_ids filter is active: each
+# worker then ingests exactly those curves. With no filter the mapping is empty,
+# so workers receive an empty curve_ids and fall back to their default —
+# fetching every curve in the category (or every queued curve in scheduled mode).
+category_curve_ids: dict[str, list[str]] = {}
+if requested_ids:
+    for c in curvemap.values():
+        if _selected(c):
+            category_curve_ids.setdefault(c.table_name(), []).append(str(c.id))
+
+
+def _curve_ids_param(category: str) -> str:
+    return ",".join(category_curve_ids.get(category, []))
+
+
 # COMMAND ----------
 
-# DBTITLE 1,Phase 2 — get/create one cluster per category (parallel)
-# Fault-tolerant: a failure provisioning one category's cluster is logged and
-# skipped so the remaining categories still get dispatched.
-def _get_or_create_cluster(category: str):
+# DBTITLE 1,Phase 2 — get/create one cluster per cluster_key (parallel)
+# Group the in-scope categories by their coarse cluster_key so we provision one
+# shared all-purpose cluster per (data_type, curve_type) instead of one per
+# table_category — the latter would spawn an unbounded number of clusters.
+cluster_key_categories: dict[str, list[str]] = {}
+for cat in categories:
+    ck = cat_to_cluster_key.get(cat, cat)
+    cluster_key_categories.setdefault(ck, []).append(cat)
+
+logger.info(
+    "Dispatching %d categories across %d cluster keys",
+    len(categories), len(cluster_key_categories),
+)
+
+
+# Fault-tolerant: a failure provisioning one cluster_key's cluster is logged and
+# skipped so the remaining cluster keys still get dispatched.
+def _get_or_create_cluster(cluster_key: str):
     try:
         cluster = client.databricks.clusters.get_or_create(
-            cluster_name=f"monteleq-ingest-{category}",
-            custom_tags={"package": "monteleq", "table_category": category},
+            cluster_name=f"monteleq-ingest-{cluster_key}",
+            custom_tags={"package": "monteleq", "cluster_key": cluster_key},
             libraries=["energyquantified"],
             wait=False,
         ).start(wait=False)
-        return category, cluster
+        return cluster_key, cluster
     except Exception:
-        logger.exception("Cluster get/create failed for category=%s", category)
-        return category, None
+        logger.exception("Cluster get/create failed for cluster_key=%s", cluster_key)
+        return cluster_key, None
 
 
 with ThreadPoolExecutor(max_workers=config.max_clusters) as executor:
     clusters = {
-        cat: cluster
-        for cat, cluster in executor.map(_get_or_create_cluster, categories)
+        ck: cluster
+        for ck, cluster in executor.map(_get_or_create_cluster, cluster_key_categories)
         if cluster is not None
     }
 
-failed = sorted(set(categories) - set(clusters))
+failed = sorted(set(cluster_key_categories) - set(clusters))
 if failed:
-    logger.warning("Cluster provisioning failed for %d categories: %s", len(failed), failed)
+    logger.warning("Cluster provisioning failed for %d cluster keys: %s", len(failed), failed)
 logger.info("Started %d clusters: %s", len(clusters), sorted(clusters))
 
 if not clusters:
@@ -240,44 +301,58 @@ ingest_notebook = f"{config.notebook_root}/ingest_category"
 dispatched: list[dict] = []
 dispatch_errors: list[str] = []
 
-for category, cluster in sorted(clusters.items()):
-    try:
-        run = client.databricks.jobs.submit(
-            run_name=f"monteleq-ingest-{category}-{run_id}",
-            timeout_seconds=3600,
-            raise_error=False,
-            tasks=[
-                SubmitTask(
-                    task_key=f"ingest_{_safe_name(category)}",
-                    existing_cluster_id=cluster.cluster_id,
-                    timeout_seconds=3600,
-                    notebook_task=NotebookTask(
-                        notebook_path=ingest_notebook,
-                        base_parameters={
-                            "table_category": category,
-                            "end_date": end_date_iso,
-                            "seconds": str(config.seconds),
-                            "catalog_name": config.catalog_name,
-                            "schema_name": config.schema_name,
-                            "mode": config.mode,
-                            "pending_table": config.pending_table,
-                        },
-                    ),
-                )
-            ],
-        )
-    except Exception:
-        logger.exception("Dispatch failed for category=%s", category)
-        dispatch_errors.append(category)
+for cluster_key, cats in sorted(cluster_key_categories.items()):
+    cluster = clusters.get(cluster_key)
+    if cluster is None:
+        # Cluster provisioning failed in Phase 2; skip all its categories.
+        dispatch_errors.extend(cats)
         continue
 
-    dispatched.append(
-        {"table_category": category, "cluster_id": cluster.cluster_id, "run_id": run.run_id}
-    )
-    logger.info(
-        "Dispatched %s -> cluster=%s run=%s",
-        category, cluster.cluster_id, run.run_id,
-    )
+    for category in sorted(cats):
+        try:
+            run = client.databricks.jobs.submit(
+                run_name=f"monteleq-ingest-{category}-{run_id}",
+                timeout_seconds=3600,
+                raise_error=False,
+                tasks=[
+                    SubmitTask(
+                        task_key=f"ingest_{_safe_name(category)}",
+                        existing_cluster_id=cluster.cluster_id,
+                        timeout_seconds=3600,
+                        notebook_task=NotebookTask(
+                            notebook_path=ingest_notebook,
+                            base_parameters={
+                                "table_category": category,
+                                "curve_ids": _curve_ids_param(category),
+                                "end_date": end_date_iso,
+                                "seconds": str(config.seconds),
+                                "batch_size": str(config.batch_size),
+                                "catalog_name": config.catalog_name,
+                                "schema_name": config.schema_name,
+                                "mode": config.mode,
+                                "pending_table": config.pending_table,
+                            },
+                        ),
+                    )
+                ],
+            )
+        except Exception:
+            logger.exception("Dispatch failed for category=%s", category)
+            dispatch_errors.append(category)
+            continue
+
+        dispatched.append(
+            {
+                "table_category": category,
+                "cluster_key": cluster_key,
+                "cluster_id": cluster.cluster_id,
+                "run_id": run.run_id,
+            }
+        )
+        logger.info(
+            "Dispatched %s -> cluster_key=%s cluster=%s run=%s",
+            category, cluster_key, cluster.cluster_id, run.run_id,
+        )
 
 if dispatch_errors:
     logger.warning(
@@ -285,7 +360,7 @@ if dispatch_errors:
         len(dispatch_errors), sorted(dispatch_errors),
     )
 
-print(f"Dispatched {len(dispatched)} of {len(clusters)} category jobs")
+print(f"Dispatched {len(dispatched)} category jobs across {len(clusters)} clusters")
 
 # COMMAND ----------
 
@@ -293,6 +368,7 @@ print(f"Dispatched {len(dispatched)} of {len(clusters)} category jobs")
 output = [
     {
         "table_category": d["table_category"],
+        "cluster_key": d["cluster_key"],
         "cluster_id": d["cluster_id"],
         "run_id": str(d["run_id"]),
         "end_date": end_date_iso,

@@ -14,13 +14,15 @@
 #                table_category
 #              - backfill (seconds > 3600): dispatches every known category over
 #                the full window (no queue)
-#         3. Gets/creates one dedicated all-purpose cluster per category,
-#            in parallel across categories
-#         4. Submits one `ingest_category` job run per category on its cluster
+#         3. Groups categories by cluster_key (data_type_curve_type) and
+#            gets/creates one dedicated all-purpose cluster per cluster_key,
+#            in parallel
+#         4. Submits one `ingest_category` job run per table_category onto its
+#            cluster_key's shared cluster
 #
 #       By default (scheduled every hour):
 #           dispatcher pins end_date=now, seconds=3600.
-#           Each table_category runs on its own dedicated cluster.
+#           Categories sharing a cluster_key share a cluster.
 #
 #   Manual backfill example (6 months, overwrite):
 #
@@ -34,6 +36,11 @@
 #
 #   databricks bundle run -t prd monteleq_dispatcher \
 #       --params table_category=actual_timeseries_power,forecast_instance_wind
+#
+#   Relaunch specific curves only (by id or name, across categories):
+#
+#   databricks bundle run -t prd monteleq_dispatcher \
+#       --params curve_ids="DE Wind Power MWh/h H Forecast,123456789"
 
 bundle:
   name: monteleq
@@ -78,6 +85,10 @@ resources:
           default: ""
         - name: table_category
           default: ""
+        - name: curve_ids
+          default: ""
+        - name: batch_size
+          default: "200"
         - name: catalog_name
           default: ${var.catalog_name}
         - name: schema_name
@@ -95,6 +106,8 @@ resources:
               catalog_name: "{{job.parameters.catalog_name}}"
               schema_name: "{{job.parameters.schema_name}}"
               table_category: "{{job.parameters.table_category}}"
+              curve_ids: "{{job.parameters.curve_ids}}"
+              batch_size: "{{job.parameters.batch_size}}"
               end_date: "{{job.parameters.end_date}}"
               seconds: "{{job.parameters.seconds}}"
               mode: "{{job.parameters.mode}}"

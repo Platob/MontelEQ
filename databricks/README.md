@@ -16,11 +16,16 @@ A single scheduled job, `monteleq_dispatcher`, runs one self-contained
     the updated curves into `pending_requests`, bucketed by `table_category`; or
   - *backfill* (`seconds > 3600`): selects every known category to ingest over
     the full window (no queue).
-- **Phase 2 — cluster**: for each discovered category, get-or-create a dedicated
-  all-purpose cluster via `client.databricks.clusters.get_or_create`, in
-  parallel across categories using a thread pool.
-- **Phase 3 — dispatch**: submit a one-off job run per category that runs the
-  `ingest_category` worker on the category's dedicated cluster.
+- **Phase 2 — cluster**: group the in-scope categories by their coarse
+  `cluster_key` (`data_type_curve_type`) and get-or-create one dedicated
+  all-purpose cluster per cluster_key via
+  `client.databricks.clusters.get_or_create`, in parallel using a thread pool.
+  Categories sharing a cluster_key share a cluster, so the cluster count stays
+  bounded by the number of (data_type, curve_type) pairs rather than the
+  number of categories.
+- **Phase 3 — dispatch**: submit a one-off `ingest_category` job run per
+  `table_category` onto its cluster_key's shared cluster. Each worker fetches,
+  curates and inserts in bounded `batch_size` batches.
 
 ## Notebooks
 
@@ -39,10 +44,22 @@ A single scheduled job, `monteleq_dispatcher`, runs one self-contained
 ## Idempotency
 
 The dispatcher upserts the queue by `request_id`. Each worker reads the queue
-for its category, ingests, and only then deletes the exact rows it consumed, so
-a failed run replays cleanly by re-reading the same rows. Worker windows are
-pinned (`end_date` + `seconds` forwarded from the dispatcher) so retries reuse
-the identical time window.
+for its category, ingests, and only deletes the rows it consumed **when the run
+reported no insert failures** — otherwise the rows are left to replay on the
+next run. Worker windows are pinned (`end_date` + `seconds` forwarded from the
+dispatcher) so retries reuse the identical time window.
+
+## Restricting scope
+
+A run can be narrowed two ways, which combine with AND semantics:
+
+- `table_category` — comma-separated category keys.
+- `curve_ids` — comma-separated curve ids or names. The dispatcher restricts
+  the dispatched categories to those containing the selected curves, resolves
+  the explicit in-scope curve ids **per category**, and hands each worker only
+  its category's ids — so the worker ingests exactly the matching curves. With
+  no `curve_ids` filter, each worker receives an empty list and ingests every
+  curve in its category (or every queued curve in scheduled mode).
 
 ## Deployment
 
@@ -76,4 +93,11 @@ Restrict to specific categories:
 ```
 databricks bundle run -t prd monteleq_dispatcher \
     --params table_category=actual_timeseries_power,forecast_instance_wind
+```
+
+Restrict to specific curves (by id or name, across categories):
+
+```
+databricks bundle run -t prd monteleq_dispatcher \
+    --params curve_ids="DE Wind Power MWh/h H Forecast,123456789"
 ```

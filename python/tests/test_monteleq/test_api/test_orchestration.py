@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from types import SimpleNamespace
 
+import polars as pl
 import pytest
 from energyquantified.metadata import CurveType, DataType
 
@@ -73,6 +74,221 @@ class TestCategoryCurves:
 
     def test_unknown_category(self, curves):
         assert APIClient.category_curves(_client(curves), "does_not_exist") == []
+
+
+class TestParseCurveIds:
+    def test_empty_inputs(self):
+        assert APIClient.parse_curve_ids("") == set()
+        assert APIClient.parse_curve_ids(None) == set()
+        assert APIClient.parse_curve_ids([]) == set()
+
+    def test_comma_string_trimmed(self):
+        assert APIClient.parse_curve_ids(" a , b ,, c ") == {"a", "b", "c"}
+
+    def test_iterable_of_ids(self):
+        assert APIClient.parse_curve_ids([1, 2, "x"]) == {"1", "2", "x"}
+
+
+class TestSelectCurves:
+    def test_no_filters_returns_all(self, curves):
+        result = APIClient.select_curves(_client(curves))
+        assert {c.name for c in result} == {c.name for c in curves}
+
+    def test_filter_by_category(self, curves):
+        cat = curves[1].table_name()
+        result = APIClient.select_curves(_client(curves), table_categories=[cat])
+        assert [c.name for c in result] == [curves[1].name]
+
+    def test_filter_by_curve_id(self, curves):
+        target = curves[0]
+        result = APIClient.select_curves(
+            _client(curves), curve_ids={str(target.id)}
+        )
+        assert [c.name for c in result] == [target.name]
+
+    def test_filter_by_curve_name(self, curves):
+        target = curves[2]
+        result = APIClient.select_curves(_client(curves), curve_ids={target.name})
+        assert [c.name for c in result] == [target.name]
+
+    def test_category_and_id_combine_with_and(self, curves):
+        # curves[0] is the only curve in its category; pairing it with another
+        # curve's id yields nothing (AND semantics).
+        cat = curves[0].table_name()
+        result = APIClient.select_curves(
+            _client(curves), table_categories=[cat], curve_ids={str(curves[1].id)}
+        )
+        assert result == []
+
+    def test_unknown_id_returns_empty(self, curves):
+        assert APIClient.select_curves(_client(curves), curve_ids={"nope"}) == []
+
+
+class TestPerCategoryCurveIdDispatch:
+    """The dispatcher resolves curve_ids into a per-category id list and hands
+    each worker only its category's ids; the worker re-selects exactly those."""
+
+    def _resolve(self, client, requested_ids):
+        """Mirror the dispatcher: group selected curves' ids by category."""
+        category_curve_ids: dict[str, list[str]] = {}
+        for c in APIClient.select_curves(client, curve_ids=requested_ids):
+            category_curve_ids.setdefault(c.table_name(), []).append(str(c.id))
+        return category_curve_ids
+
+    def test_round_trip_selects_exactly_requested(self, curves):
+        client = _client(curves)
+        requested_ids = {str(curves[0].id), str(curves[2].id)}
+
+        category_curve_ids = self._resolve(client, requested_ids)
+
+        # Each category's worker, handed its resolved ids, selects exactly them.
+        for cat, ids in category_curve_ids.items():
+            got = APIClient.select_curves(
+                client, table_categories=[cat], curve_ids=set(ids)
+            )
+            assert {str(c.id) for c in got} == set(ids)
+
+        # The union across categories covers exactly the requested selection.
+        dispatched = {cid for ids in category_curve_ids.values() for cid in ids}
+        assert dispatched == requested_ids
+
+    def test_no_filter_yields_no_mapping_and_full_category(self, curves):
+        client = _client(curves)
+        # No curve_ids → dispatcher builds no mapping → empty param per worker.
+        assert self._resolve(client, set()) == {}
+
+        # An empty curve_ids param makes the worker ingest the whole category.
+        cat = curves[1].table_name()
+        got = APIClient.select_curves(
+            client, table_categories=[cat], curve_ids=None
+        )
+        assert [c.name for c in got] == [curves[1].name]
+
+
+class TestClusterKeyGrouping:
+    def test_category_uniquely_maps_to_cluster_key(self, curves):
+        # The dispatcher groups categories by cluster_key via setdefault, which
+        # is only safe if every curve in a table_category shares one cluster_key.
+        # table_name embeds data_type + curve_type, so this must hold.
+        by_category: dict[str, set[str]] = {}
+        for c in curves:
+            by_category.setdefault(c.table_name(), set()).add(c.cluster_key())
+        for cat, keys in by_category.items():
+            assert len(keys) == 1, f"{cat} maps to multiple cluster keys: {keys}"
+
+    def test_cluster_key_is_table_name_prefix(self, curves):
+        for c in curves:
+            assert c.table_name().startswith(c.cluster_key())
+
+
+class _FakeResponse:
+    def __init__(self, ok: bool = True) -> None:
+        self.ok = ok
+
+
+class _Insert:
+    """Stand-in for a curated Delta table; records whether insert ran."""
+
+    def __init__(self, *, raises: bool = False) -> None:
+        self.raises = raises
+        self.calls = 0
+
+    def insert(self, *args, **kwargs):
+        self.calls += 1
+        if self.raises:
+            raise RuntimeError("write failed")
+
+
+class _FakeBatch:
+    def __init__(self, responses):
+        self._responses = responses
+
+    def iter_responses(self):
+        return iter(self._responses)
+
+
+def _stats_dict() -> dict[str, int]:
+    return {
+        "batches": 0,
+        "curated_rows": 0,
+        "inserts": 0,
+        "insert_failures": 0,
+        "curation_failures": 0,
+    }
+
+
+def _polars_client(curve, *, curate, insert):
+    """Minimal stand-in exposing the attributes ``_curate_batch_polars`` reads."""
+    return SimpleNamespace(
+        metadata=SimpleNamespace(curvemap={curve.name: curve}),
+        curation=SimpleNamespace(curate=curate, table=lambda c: insert),
+    )
+
+
+class TestIngestStats:
+    """Drive the Polars curate path to verify the ``_stats`` accumulator that
+    ``ingest_spark`` returns (and the worker's drain decision relies on)."""
+
+    def _curve(self):
+        return _curve("DE Power Actual MWh/h", categories=("Power",))
+
+    def test_counts_batch_rows_and_inserts(self):
+        curve = self._curve()
+        frame = pl.DataFrame({"curve_name": [curve.name, curve.name]})
+        insert = _Insert()
+        client = _polars_client(curve, curate=lambda r: frame, insert=insert)
+        stats = _stats_dict()
+
+        # One ok response + one non-ok response (the latter is skipped).
+        batch = _FakeBatch([_FakeResponse(True), _FakeResponse(False)])
+        list(APIClient._curate_batch_polars(
+            client, batch, insert_all=True, return_data=False, stats=stats,
+        ))
+
+        assert stats["batches"] == 1
+        assert stats["curated_rows"] == 2
+        assert stats["inserts"] == 1
+        assert stats["insert_failures"] == 0
+        assert stats["curation_failures"] == 0
+        assert insert.calls == 1
+
+    def test_curation_error_is_not_an_insert_failure(self):
+        # Deterministic parse errors must not block the queue drain, so they
+        # land in ``curation_failures`` rather than ``insert_failures``.
+        curve = self._curve()
+
+        def boom(_response):
+            raise ValueError("unparseable")
+
+        insert = _Insert()
+        client = _polars_client(curve, curate=boom, insert=insert)
+        stats = _stats_dict()
+
+        list(APIClient._curate_batch_polars(
+            client, _FakeBatch([_FakeResponse(True)]),
+            insert_all=True, return_data=False, stats=stats,
+        ))
+
+        assert stats["curation_failures"] == 1
+        assert stats["insert_failures"] == 0
+        assert stats["inserts"] == 0
+        assert insert.calls == 0
+
+    def test_write_error_is_an_insert_failure(self):
+        curve = self._curve()
+        frame = pl.DataFrame({"curve_name": [curve.name]})
+        insert = _Insert(raises=True)
+        client = _polars_client(curve, curate=lambda r: frame, insert=insert)
+        stats = _stats_dict()
+
+        list(APIClient._curate_batch_polars(
+            client, _FakeBatch([_FakeResponse(True)]),
+            insert_all=True, return_data=False, stats=stats,
+        ))
+
+        assert stats["insert_failures"] == 1
+        assert stats["inserts"] == 0
+        assert insert.calls == 1
 
 
 class TestCurveRequests:
