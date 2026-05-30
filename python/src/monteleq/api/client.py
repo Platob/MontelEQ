@@ -443,11 +443,16 @@ class APIClient(BaseClient):
         Defaults to ``Mode.APPEND``.
         """
         t0 = time.perf_counter()
+        # ``insert_failures`` counts failed Delta writes — typically transient,
+        # so callers use it to decide whether to retry/replay. ``curation_failures``
+        # counts deterministic parse errors on individual responses, which won't
+        # self-heal on replay and so must not block a queue drain.
         stats: dict[str, int | float] = {
             "batches": 0,
             "curated_rows": 0,
             "inserts": 0,
             "insert_failures": 0,
+            "curation_failures": 0,
         }
 
         # ``curate_curves(return_data=False)`` yields nothing, but iterating it
@@ -468,9 +473,9 @@ class APIClient(BaseClient):
         stats["elapsed"] = round(time.perf_counter() - t0, 2)
         logger.info(
             "ingest complete: %d batches, %d curated rows, %d inserts, "
-            "%d failures, %.2fs elapsed",
+            "%d insert failures, %d curation failures, %.2fs elapsed",
             stats["batches"], stats["curated_rows"], stats["inserts"],
-            stats["insert_failures"], stats["elapsed"],
+            stats["insert_failures"], stats["curation_failures"], stats["elapsed"],
         )
         return stats
 
@@ -581,7 +586,7 @@ class APIClient(BaseClient):
             except Exception:
                 logger.exception("Curation failed for response %s", response)
                 if stats is not None:
-                    stats["insert_failures"] = stats.get("insert_failures", 0) + 1
+                    stats["curation_failures"] = stats.get("curation_failures", 0) + 1
                 continue
             if df.height == 0:
                 continue

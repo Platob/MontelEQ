@@ -106,32 +106,46 @@ if not category_curves:
     print({"table_category": config.table_category, "curves": 0, "status": "empty"})
     dbutils.notebook.exit("empty")  # noqa: F821
 
-# Read the pending queue this dispatcher run populated for the category.
+# A run is a backfill iff its window exceeds one hour — the same threshold the
+# dispatcher uses to decide whether to populate the queue. Backfills ingest the
+# full (filtered) category directly and must ignore any queue rows left behind
+# by a prior scheduled run for this category.
+is_backfill = config.seconds > 3600
 pending = client.pending_requests_table(table_name=config.pending_table)
 category_lit = config.table_category.replace("'", "''")
-pending_df = pending.lazy(
-    sql=(
-        "SELECT request_id, curve_name FROM {self} "
-        f"WHERE table_category = '{category_lit}'"
-    )
-).read_polars_frame()
 
-queued_names = (
-    pending_df["curve_name"].unique().to_list() if pending_df.height else []
-)
-
-if queued_names:
-    curves = [category_curves[n] for n in queued_names if n in category_curves]
-    logger.info(
-        "Category %s: ingesting %d queued curves (of %d in category)",
-        config.table_category, len(curves), len(category_curves),
-    )
-else:
+if is_backfill:
+    pending_df = None
     curves = list(category_curves.values())
     logger.info(
-        "Category %s: no queue, ingesting all %d curves",
+        "Category %s: backfill, ingesting all %d curves",
         config.table_category, len(curves),
     )
+else:
+    # Read the pending queue this dispatcher run populated for the category.
+    pending_df = pending.lazy(
+        sql=(
+            "SELECT request_id, curve_name FROM {self} "
+            f"WHERE table_category = '{category_lit}'"
+        )
+    ).read_polars_frame()
+
+    queued_names = (
+        pending_df["curve_name"].unique().to_list() if pending_df.height else []
+    )
+
+    if queued_names:
+        curves = [category_curves[n] for n in queued_names if n in category_curves]
+        logger.info(
+            "Category %s: ingesting %d queued curves (of %d in category)",
+            config.table_category, len(curves), len(category_curves),
+        )
+    else:
+        curves = list(category_curves.values())
+        logger.info(
+            "Category %s: no queue, ingesting all %d curves",
+            config.table_category, len(curves),
+        )
 
 if not curves:
     dbutils.notebook.exit(f"empty:{config.table_category}")  # noqa: F821
@@ -162,20 +176,28 @@ logger.info("Ingestion complete: %s", result)
 
 # DBTITLE 1,Drain consumed pending rows (idempotent, only on clean runs)
 # Only drain the queue when the run inserted with no failures — otherwise leave
-# the rows so the next run replays them over the same pinned window.
+# the rows so the next run replays them over the same pinned window. Restrict
+# the delete to the request_ids of curves this run actually ingested, so a
+# curve_ids-narrowed run doesn't discard queue rows for curves it skipped.
 insert_failures = int(stats.get("insert_failures", 0))
-if pending_df.height and insert_failures == 0:
-    request_ids = pending_df["request_id"].to_list()
-    id_csv = ", ".join("'" + rid.replace("'", "''") + "'" for rid in request_ids)
-    client.sql.execute(
-        f"DELETE FROM {pending.full_name()} "
-        f"WHERE table_category = '{category_lit}' AND request_id IN ({id_csv})"
-    )
+if pending_df is not None and pending_df.height and insert_failures == 0:
+    ingested_names = {c.name for c in curves}
+    request_ids = [
+        row["request_id"]
+        for row in pending_df.iter_rows(named=True)
+        if row["curve_name"] in ingested_names
+    ]
+    if request_ids:
+        id_csv = ", ".join("'" + rid.replace("'", "''") + "'" for rid in request_ids)
+        client.sql.execute(
+            f"DELETE FROM {pending.full_name()} "
+            f"WHERE table_category = '{category_lit}' AND request_id IN ({id_csv})"
+        )
     logger.info(
-        "Drained %d pending rows for category=%s",
-        len(request_ids), config.table_category,
+        "Drained %d of %d pending rows for category=%s",
+        len(request_ids), pending_df.height, config.table_category,
     )
-elif pending_df.height:
+elif pending_df is not None and pending_df.height:
     logger.warning(
         "Skipping drain for category=%s: %d insert failure(s); "
         "%d pending rows will replay next run",

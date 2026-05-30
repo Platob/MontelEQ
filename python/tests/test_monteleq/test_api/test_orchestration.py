@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from types import SimpleNamespace
 
+import polars as pl
 import pytest
 from energyquantified.metadata import CurveType, DataType
 
@@ -137,6 +138,116 @@ class TestClusterKeyGrouping:
     def test_cluster_key_is_table_name_prefix(self, curves):
         for c in curves:
             assert c.table_name().startswith(c.cluster_key())
+
+
+class _FakeResponse:
+    def __init__(self, ok: bool = True) -> None:
+        self.ok = ok
+
+
+class _Insert:
+    """Stand-in for a curated Delta table; records whether insert ran."""
+
+    def __init__(self, *, raises: bool = False) -> None:
+        self.raises = raises
+        self.calls = 0
+
+    def insert(self, *args, **kwargs):
+        self.calls += 1
+        if self.raises:
+            raise RuntimeError("write failed")
+
+
+class _FakeBatch:
+    def __init__(self, responses):
+        self._responses = responses
+
+    def iter_responses(self):
+        return iter(self._responses)
+
+
+def _stats_dict() -> dict[str, int]:
+    return {
+        "batches": 0,
+        "curated_rows": 0,
+        "inserts": 0,
+        "insert_failures": 0,
+        "curation_failures": 0,
+    }
+
+
+def _polars_client(curve, *, curate, insert):
+    """Minimal stand-in exposing the attributes ``_curate_batch_polars`` reads."""
+    return SimpleNamespace(
+        metadata=SimpleNamespace(curvemap={curve.name: curve}),
+        curation=SimpleNamespace(curate=curate, table=lambda c: insert),
+    )
+
+
+class TestIngestStats:
+    """Drive the Polars curate path to verify the ``_stats`` accumulator that
+    ``ingest_spark`` returns (and the worker's drain decision relies on)."""
+
+    def _curve(self):
+        return _curve("DE Power Actual MWh/h", categories=("Power",))
+
+    def test_counts_batch_rows_and_inserts(self):
+        curve = self._curve()
+        frame = pl.DataFrame({"curve_name": [curve.name, curve.name]})
+        insert = _Insert()
+        client = _polars_client(curve, curate=lambda r: frame, insert=insert)
+        stats = _stats_dict()
+
+        # One ok response + one non-ok response (the latter is skipped).
+        batch = _FakeBatch([_FakeResponse(True), _FakeResponse(False)])
+        list(APIClient._curate_batch_polars(
+            client, batch, insert_all=True, return_data=False, stats=stats,
+        ))
+
+        assert stats["batches"] == 1
+        assert stats["curated_rows"] == 2
+        assert stats["inserts"] == 1
+        assert stats["insert_failures"] == 0
+        assert stats["curation_failures"] == 0
+        assert insert.calls == 1
+
+    def test_curation_error_is_not_an_insert_failure(self):
+        # Deterministic parse errors must not block the queue drain, so they
+        # land in ``curation_failures`` rather than ``insert_failures``.
+        curve = self._curve()
+
+        def boom(_response):
+            raise ValueError("unparseable")
+
+        insert = _Insert()
+        client = _polars_client(curve, curate=boom, insert=insert)
+        stats = _stats_dict()
+
+        list(APIClient._curate_batch_polars(
+            client, _FakeBatch([_FakeResponse(True)]),
+            insert_all=True, return_data=False, stats=stats,
+        ))
+
+        assert stats["curation_failures"] == 1
+        assert stats["insert_failures"] == 0
+        assert stats["inserts"] == 0
+        assert insert.calls == 0
+
+    def test_write_error_is_an_insert_failure(self):
+        curve = self._curve()
+        frame = pl.DataFrame({"curve_name": [curve.name]})
+        insert = _Insert(raises=True)
+        client = _polars_client(curve, curate=lambda r: frame, insert=insert)
+        stats = _stats_dict()
+
+        list(APIClient._curate_batch_polars(
+            client, _FakeBatch([_FakeResponse(True)]),
+            insert_all=True, return_data=False, stats=stats,
+        ))
+
+        assert stats["insert_failures"] == 1
+        assert stats["inserts"] == 0
+        assert insert.calls == 1
 
 
 class TestCurveRequests:
