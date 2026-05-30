@@ -19,7 +19,10 @@
 # MAGIC    pool. Categories sharing a cluster_key share a cluster, so the cluster
 # MAGIC    count stays bounded regardless of how many categories exist.
 # MAGIC 3. **Dispatch** — submit a one-off `ingest_category` job run per
-# MAGIC    `table_category` onto its cluster_key's shared cluster.
+# MAGIC    `table_category` onto its cluster_key's shared cluster. When a
+# MAGIC    `curve_ids` filter is active, each worker is handed the explicit
+# MAGIC    in-scope curve ids for its category; otherwise it gets an empty
+# MAGIC    `curve_ids` and ingests every curve in the category.
 # MAGIC
 # MAGIC Parameters:
 # MAGIC
@@ -225,6 +228,22 @@ else:
 if not categories:
     dbutils.notebook.exit("no_categories")  # noqa: F821
 
+# Resolve, per category, the explicit in-scope curve ids to forward to that
+# category's worker. Only populated when a curve_ids filter is active: each
+# worker then ingests exactly those curves. With no filter the mapping is empty,
+# so workers receive an empty curve_ids and fall back to their default —
+# fetching every curve in the category (or every queued curve in scheduled mode).
+category_curve_ids: dict[str, list[str]] = {}
+if requested_ids:
+    for c in curvemap.values():
+        if _selected(c):
+            category_curve_ids.setdefault(c.table_name(), []).append(str(c.id))
+
+
+def _curve_ids_param(category: str) -> str:
+    return ",".join(category_curve_ids.get(category, []))
+
+
 # COMMAND ----------
 
 # DBTITLE 1,Phase 2 — get/create one cluster per cluster_key (parallel)
@@ -304,7 +323,7 @@ for cluster_key, cats in sorted(cluster_key_categories.items()):
                             notebook_path=ingest_notebook,
                             base_parameters={
                                 "table_category": category,
-                                "curve_ids": config.curve_ids,
+                                "curve_ids": _curve_ids_param(category),
                                 "end_date": end_date_iso,
                                 "seconds": str(config.seconds),
                                 "batch_size": str(config.batch_size),

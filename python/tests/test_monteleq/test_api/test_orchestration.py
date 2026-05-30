@@ -124,6 +124,47 @@ class TestSelectCurves:
         assert APIClient.select_curves(_client(curves), curve_ids={"nope"}) == []
 
 
+class TestPerCategoryCurveIdDispatch:
+    """The dispatcher resolves curve_ids into a per-category id list and hands
+    each worker only its category's ids; the worker re-selects exactly those."""
+
+    def _resolve(self, client, requested_ids):
+        """Mirror the dispatcher: group selected curves' ids by category."""
+        category_curve_ids: dict[str, list[str]] = {}
+        for c in APIClient.select_curves(client, curve_ids=requested_ids):
+            category_curve_ids.setdefault(c.table_name(), []).append(str(c.id))
+        return category_curve_ids
+
+    def test_round_trip_selects_exactly_requested(self, curves):
+        client = _client(curves)
+        requested_ids = {str(curves[0].id), str(curves[2].id)}
+
+        category_curve_ids = self._resolve(client, requested_ids)
+
+        # Each category's worker, handed its resolved ids, selects exactly them.
+        for cat, ids in category_curve_ids.items():
+            got = APIClient.select_curves(
+                client, table_categories=[cat], curve_ids=set(ids)
+            )
+            assert {str(c.id) for c in got} == set(ids)
+
+        # The union across categories covers exactly the requested selection.
+        dispatched = {cid for ids in category_curve_ids.values() for cid in ids}
+        assert dispatched == requested_ids
+
+    def test_no_filter_yields_no_mapping_and_full_category(self, curves):
+        client = _client(curves)
+        # No curve_ids → dispatcher builds no mapping → empty param per worker.
+        assert self._resolve(client, set()) == {}
+
+        # An empty curve_ids param makes the worker ingest the whole category.
+        cat = curves[1].table_name()
+        got = APIClient.select_curves(
+            client, table_categories=[cat], curve_ids=None
+        )
+        assert [c.name for c in got] == [curves[1].name]
+
+
 class TestClusterKeyGrouping:
     def test_category_uniquely_maps_to_cluster_key(self, curves):
         # The dispatcher groups categories by cluster_key via setdefault, which

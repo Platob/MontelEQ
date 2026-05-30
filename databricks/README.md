@@ -55,8 +55,11 @@ A run can be narrowed two ways, which combine with AND semantics:
 
 - `table_category` — comma-separated category keys.
 - `curve_ids` — comma-separated curve ids or names. The dispatcher restricts
-  the dispatched categories to those containing the selected curves and
-  forwards the filter to each worker, which ingests only the matching curves.
+  the dispatched categories to those containing the selected curves, resolves
+  the explicit in-scope curve ids **per category**, and hands each worker only
+  its category's ids — so the worker ingests exactly the matching curves. With
+  no `curve_ids` filter, each worker receives an empty list and ingests every
+  curve in its category (or every queued curve in scheduled mode).
 
 ## Deployment
 

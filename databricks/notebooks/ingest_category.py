@@ -23,7 +23,9 @@
 # MAGIC
 # MAGIC * `table_category` — table category key (e.g. `actual_timeseries_power`).
 # MAGIC * `curve_ids` — optional comma-separated curve ids/names to restrict the
-# MAGIC   run to specific curves within the category.
+# MAGIC   run to specific curves within the category. Normally set by the
+# MAGIC   dispatcher to this category's resolved in-scope ids. When empty, every
+# MAGIC   curve in the category is ingested (the default).
 # MAGIC * `end_date` — end of the ingestion window (ISO-8601, default now).
 # MAGIC * `seconds` — lookback in seconds (default 3600).
 # MAGIC * `batch_size` — HTTP requests fetched + curated + inserted per batch
